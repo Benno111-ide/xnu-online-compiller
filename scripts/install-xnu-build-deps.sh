@@ -65,6 +65,8 @@ fi
 kernel_private_headers="$sdkroot/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders"
 sudo mkdir -p \
     "$sdkroot/usr/local/include/kernel" \
+    "$sdkroot/usr/local/include/TrustCache" \
+    "$sdkroot/usr/local/include/iBoot" \
     "$kernel_private_headers/AppleFeatures" \
     "$kernel_private_headers/platform"
 
@@ -75,6 +77,84 @@ if [ ! -f "$kernel_private_headers/AppleFeatures/AppleFeatures.h" ]; then
 #endif
 HEADER
     sudo cp "$dst/AppleFeatures.h" "$kernel_private_headers/AppleFeatures/AppleFeatures.h"
+fi
+
+if [ ! -f "$sdkroot/usr/local/include/iBoot/boot_args_abi.h" ]; then
+    cat > "$dst/boot_args_abi.h" <<'HEADER'
+#ifndef IBOOT_BOOT_ARGS_ABI_H
+#define IBOOT_BOOT_ARGS_ABI_H
+#define IBOOT_MAX_ENV_VAR_DATA_SIZE 1024
+#endif
+HEADER
+    sudo cp "$dst/boot_args_abi.h" "$sdkroot/usr/local/include/iBoot/boot_args_abi.h"
+fi
+
+if [ ! -f "$sdkroot/usr/local/include/TrustCache/API.h" ]; then
+    cat > "$dst/TrustCache-API.h" <<'HEADER'
+#ifndef TRUSTCACHE_API_H
+#define TRUSTCACHE_API_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#define kTCEntryHashSize 20
+#define kUUIDSize 16
+
+typedef struct {
+    uint32_t error;
+} TCReturn_t;
+
+enum {
+    kTCReturnSuccess = 0,
+    kTCReturnError = 1,
+    kTCReturnDuplicate = 2,
+    kTCReturnNotFound = 3
+};
+
+typedef enum {
+    kTCTypeInvalid = 0,
+    kTCTypeStatic = 1,
+    kTCTypeEngineering = 2,
+    kTCTypeLegacy = 3,
+    kTCTypeLTRS = 4,
+    kTCTypeDTRS = 5,
+    kTCTypeCryptex1BootOS = 6,
+    kTCTypeCryptex1BootApp = 7,
+    kTCTypeTotal = 8
+} TCType_t;
+
+typedef enum {
+    kTCQueryTypeAll = 0,
+    kTCQueryTypeLoadable = 1,
+    kTCQueryTypeTotal = 2
+} TCQueryType_t;
+
+typedef uint64_t TCCapabilities_t;
+
+enum {
+    kTCCapabilityNone = 0
+};
+
+typedef struct TrustCache {
+    uintptr_t opaque[4];
+} TrustCache_t;
+
+typedef struct TrustCacheRuntime {
+    uintptr_t opaque[4];
+} TrustCacheRuntime_t;
+
+typedef struct TrustCacheMutableRuntime {
+    uintptr_t opaque[4];
+} TrustCacheMutableRuntime_t;
+
+typedef struct TrustCacheQueryToken {
+    const TrustCache_t *trustCache;
+    const void *trustCacheEntry;
+} TrustCacheQueryToken_t;
+
+#endif
+HEADER
+    sudo cp "$dst/TrustCache-API.h" "$sdkroot/usr/local/include/TrustCache/API.h"
 fi
 
 echo "Installed AvailabilityVersions $actual_commit into $sdkroot"

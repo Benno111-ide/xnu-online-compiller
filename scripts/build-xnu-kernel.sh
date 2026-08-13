@@ -50,6 +50,7 @@ make -C "$src" \
     ARCH_CONFIGS="$xnu_arch" \
     KERNEL_CONFIGS=RELEASE \
     RC_DARWIN_KERNEL_VERSION="$RC_DARWIN_KERNEL_VERSION" \
+    BUILD_WERROR=0 \
     BUILD_LTO=0 \
     BUILD_DSYM=0 \
     OBJROOT="$objroot" \
