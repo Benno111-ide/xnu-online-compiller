@@ -95,8 +95,10 @@ if [ ! -f "$sdkroot/usr/local/include/CodeSignature/Entitlements.h" ]; then
 #ifndef CODESIGNATURE_ENTITLEMENTS_H
 #define CODESIGNATURE_ENTITLEMENTS_H
 
-#include <CoreEntitlements/CoreEntitlements.h>
-#include <CoreEntitlements/CoreEntitlementsPriv.h>
+#define kCSWebBrowserHostEntitlement "com.apple.private.web-browser-engine.host"
+#define kCSWebBrowserGPUEntitlement "com.apple.private.web-browser-engine.gpu"
+#define kCSWebBrowserNetworkEntitlement "com.apple.private.web-browser-engine.network"
+#define kCSWebBrowserWebContentEntitlement "com.apple.private.web-browser-engine.webcontent"
 
 #endif
 HEADER
