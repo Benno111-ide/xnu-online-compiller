@@ -55,6 +55,7 @@ make -C "$src" \
     BUILD_WERROR=0 \
     BUILD_LTO=0 \
     BUILD_DSYM=0 \
+    CFLAGS_EXTRA="-Wno-pointer-to-int-cast -Wno-error=pointer-to-int-cast" \
     OBJROOT="$objroot" \
     DSTROOT="$dstroot" \
     SYMROOT="$symroot" \
