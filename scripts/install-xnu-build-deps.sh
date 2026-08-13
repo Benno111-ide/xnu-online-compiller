@@ -187,7 +187,7 @@ HEADER
 fi
 
 if [ ! -f "$sdkroot/usr/local/lib/kernel/libfirehose_kernel.a" ]; then
-    cat > "$dst/firehose_kernel_stub.c" <<'SOURCE'
+    cat > "$dst/firehose_kernel_common_stub.c" <<'SOURCE'
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -250,13 +250,14 @@ SOURCE
         while IFS= read -r symbol; do
             case "$symbol" in
                 _tb_*)
-                    printf 'uintptr_t %s(void) { return 0; }\n' "${symbol#_}" >> "$dst/firehose_kernel_stub.c"
+                    printf 'uintptr_t %s(void) { return 0; }\n' "${symbol#_}" >> "$dst/firehose_kernel_common_stub.c"
                     ;;
             esac
         done < "$xnu_src/config/libTightbeam.exports"
     fi
 
-    cat >> "$dst/firehose_kernel_stub.c" <<'SOURCE'
+    cat > "$dst/arm64_platform_stub.c" <<'SOURCE'
+#include <stdint.h>
 
 uintptr_t
 uat_get_desc(void)
@@ -276,11 +277,15 @@ uint64_t vm_last_phys = 0;
 SOURCE
 
     clang -c -arch x86_64 -mmacosx-version-min=15.5 \
-        "$dst/firehose_kernel_stub.c" -o "$dst/firehose_kernel_stub.x86_64.o"
+        "$dst/firehose_kernel_common_stub.c" -o "$dst/firehose_kernel_common_stub.x86_64.o"
     clang -c -arch arm64e -mmacosx-version-min=15.5 \
-        "$dst/firehose_kernel_stub.c" -o "$dst/firehose_kernel_stub.arm64e.o"
-    libtool -static -o "$dst/libfirehose_kernel.x86_64.a" "$dst/firehose_kernel_stub.x86_64.o"
-    libtool -static -o "$dst/libfirehose_kernel.arm64e.a" "$dst/firehose_kernel_stub.arm64e.o"
+        "$dst/firehose_kernel_common_stub.c" -o "$dst/firehose_kernel_common_stub.arm64e.o"
+    clang -c -arch arm64e -mmacosx-version-min=15.5 \
+        "$dst/arm64_platform_stub.c" -o "$dst/arm64_platform_stub.arm64e.o"
+    libtool -static -o "$dst/libfirehose_kernel.x86_64.a" \
+        "$dst/firehose_kernel_common_stub.x86_64.o"
+    libtool -static -o "$dst/libfirehose_kernel.arm64e.a" \
+        "$dst/firehose_kernel_common_stub.arm64e.o" "$dst/arm64_platform_stub.arm64e.o"
     lipo -create -output "$dst/libfirehose_kernel.a" \
         "$dst/libfirehose_kernel.x86_64.a" "$dst/libfirehose_kernel.arm64e.a"
     sudo cp "$dst/libfirehose_kernel.a" "$sdkroot/usr/local/lib/kernel/libfirehose_kernel.a"
