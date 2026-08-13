@@ -66,6 +66,7 @@ sudo mkdir -p \
     "$sdkroot/usr/local/include/kernel" \
     "$sdkroot/usr/local/include/CodeSignature" \
     "$sdkroot/usr/local/include/CoreEntitlements/V2" \
+    "$sdkroot/usr/local/include/os" \
     "$sdkroot/usr/local/include/TrustCache" \
     "$sdkroot/usr/local/include/iBoot" \
     "$kernel_private_headers/AppleFeatures" \
@@ -131,6 +132,50 @@ typedef struct CEKernelAPI {
 #endif
 HEADER
     sudo cp "$dst/CoreEntitlements-V2-Kernel.h" "$sdkroot/usr/local/include/CoreEntitlements/V2/Kernel.h"
+fi
+
+if [ ! -f "$sdkroot/usr/local/include/os/firehose_buffer_private.h" ]; then
+    cat > "$dst/os-firehose_buffer_private.h" <<'HEADER'
+#ifndef OS_FIREHOSE_BUFFER_PRIVATE_H
+#define OS_FIREHOSE_BUFFER_PRIVATE_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <firehose/firehose_types_private.h>
+#include <firehose/tracepoint_private.h>
+
+#ifndef FIREHOSE_BUFFER_KERNEL_DEFAULT_CHUNK_COUNT
+#define FIREHOSE_BUFFER_KERNEL_DEFAULT_CHUNK_COUNT 128
+#endif
+
+#ifndef FIREHOSE_BUFFER_KERNEL_DEFAULT_IO_PAGES
+#define FIREHOSE_BUFFER_KERNEL_DEFAULT_IO_PAGES 8
+#endif
+
+#ifndef FIREHOSE_BUFFER_KERNEL_CHUNK_COUNT
+#define FIREHOSE_BUFFER_KERNEL_CHUNK_COUNT FIREHOSE_BUFFER_KERNEL_DEFAULT_CHUNK_COUNT
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+firehose_buffer_t __firehose_buffer_create(size_t *size);
+bool __firehose_kernel_configuration_valid(uint8_t chunk_count, uint8_t io_pages);
+bool __firehose_merge_updates(firehose_push_reply_t update);
+firehose_tracepoint_t __firehose_buffer_tracepoint_reserve(uint64_t stamp,
+    firehose_stream_t stream, uint8_t flags, uint16_t pubsize, uint16_t privsize);
+void __firehose_buffer_tracepoint_flush(firehose_tracepoint_t tracepoint,
+    firehose_tracepoint_id_u tracepoint_id);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+HEADER
+    sudo cp "$dst/os-firehose_buffer_private.h" "$sdkroot/usr/local/include/os/firehose_buffer_private.h"
 fi
 
 if [ ! -f "$sdkroot/usr/local/include/TrustCache/API.h" ]; then
