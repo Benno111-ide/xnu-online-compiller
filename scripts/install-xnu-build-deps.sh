@@ -343,16 +343,6 @@ t8110dart_vo_tte(void)
 {
     return 0;
 }
-
-void
-thread_bootstrap_return(void)
-{
-    for (;;) {
-    }
-}
-
-uint64_t vm_first_phys = 0;
-uint64_t vm_last_phys = 0;
 SOURCE
 
     cat > "$dst/arm64_link_stub.s" <<'SOURCE'
