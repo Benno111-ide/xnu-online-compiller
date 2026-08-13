@@ -29,6 +29,7 @@ jobs:
             clang \
             file \
             genisoimage \
+            git \
             grub-pc-bin \
             lld \
             make \
