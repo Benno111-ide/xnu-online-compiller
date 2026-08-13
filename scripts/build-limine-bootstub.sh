@@ -11,13 +11,19 @@ work=$2
 output=$3
 
 llvm_prefix=$(brew --prefix llvm 2>/dev/null || true)
+lld_prefix=$(brew --prefix lld 2>/dev/null || true)
 clang="${CLANG:-${llvm_prefix:+$llvm_prefix/bin/clang}}"
+ld_lld="${LD_LLD:-${lld_prefix:+$lld_prefix/bin/ld.lld}}"
 
 if [ -z "$clang" ] || [ ! -x "$clang" ]; then
     clang="${CLANG:-clang}"
 fi
+if [ -z "$ld_lld" ] || [ ! -x "$ld_lld" ]; then
+    ld_lld="${LD_LLD:-ld.lld}"
+fi
 
 command -v "$clang" >/dev/null 2>&1
+command -v "$ld_lld" >/dev/null 2>&1
 
 mkdir -p "$work" "$(dirname "$output")"
 
@@ -180,10 +186,12 @@ SOURCE
 case "$arch" in
     amd64)
         target=x86_64-unknown-elf
+        linker_machine=elf_x86_64
         cflags="-mno-red-zone -mcmodel=kernel"
         ;;
     arm64)
         target=aarch64-unknown-elf
+        linker_machine=aarch64elf
         cflags=""
         ;;
     *)
@@ -206,13 +214,11 @@ esac
     -c "$kernel_c" \
     -o "$object"
 
-"$clang" \
-    -target "$target" \
-    -nostdlib \
-    -fuse-ld=lld \
-    -Wl,-no-pie \
-    -Wl,-T,"$linker" \
-    -Wl,--build-id=none \
+"$ld_lld" \
+    -m "$linker_machine" \
+    -no-pie \
+    -T "$linker" \
+    --build-id=none \
     "$object" \
     -o "$output"
 
