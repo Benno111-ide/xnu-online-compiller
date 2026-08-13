@@ -23,7 +23,7 @@ if [ "$(uname -s)" != "Darwin" ]; then
     exit 1
 fi
 
-"$(dirname "$0")/verify-xnu-source.sh" "$src"
+sh "$(dirname "$0")/verify-xnu-source.sh" "$src"
 
 mkdir -p "$out"
 out_abs="$(cd "$out" && pwd)"
