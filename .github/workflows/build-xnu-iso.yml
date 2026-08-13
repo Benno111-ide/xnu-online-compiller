@@ -26,25 +26,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang \
             file \
             genisoimage \
             git \
-            grub-pc-bin \
-            lld \
             make \
-            mtools \
             xorriso
 
-      - name: Compile kernel and create ISO
+      - name: Fetch Apple XNU and create source ISO
         run: make ARCH=${{ matrix.arch }} all
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
         with:
-          name: xnu-basic-${{ matrix.arch }}-iso
+          name: apple-xnu-source-${{ matrix.arch }}-iso
           path: |
-            build/${{ matrix.arch }}/xnu-basic-${{ matrix.arch }}.elf
-            build/${{ matrix.arch }}/xnu-basic-${{ matrix.arch }}.iso
+            build/${{ matrix.arch }}/apple-xnu-source-${{ matrix.arch }}.iso
             build/${{ matrix.arch }}/iso-contents.txt
           if-no-files-found: error
