@@ -62,4 +62,19 @@ if [ ! -x "$availability_tool" ]; then
     exit 1
 fi
 
+kernel_private_headers="$sdkroot/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders"
+sudo mkdir -p \
+    "$sdkroot/usr/local/include/kernel" \
+    "$kernel_private_headers/AppleFeatures" \
+    "$kernel_private_headers/platform"
+
+if [ ! -f "$kernel_private_headers/AppleFeatures/AppleFeatures.h" ]; then
+    cat > "$dst/AppleFeatures.h" <<'HEADER'
+#ifndef APPLEFEATURES_H
+#define APPLEFEATURES_H
+#endif
+HEADER
+    sudo cp "$dst/AppleFeatures.h" "$kernel_private_headers/AppleFeatures/AppleFeatures.h"
+fi
+
 echo "Installed AvailabilityVersions $actual_commit into $sdkroot"
