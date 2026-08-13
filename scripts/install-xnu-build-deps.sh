@@ -65,6 +65,7 @@ fi
 kernel_private_headers="$sdkroot/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders"
 sudo mkdir -p \
     "$sdkroot/usr/local/include/kernel" \
+    "$sdkroot/usr/local/include/CodeSignature" \
     "$sdkroot/usr/local/include/TrustCache" \
     "$sdkroot/usr/local/include/iBoot" \
     "$kernel_private_headers/AppleFeatures" \
@@ -87,6 +88,19 @@ if [ ! -f "$sdkroot/usr/local/include/iBoot/boot_args_abi.h" ]; then
 #endif
 HEADER
     sudo cp "$dst/boot_args_abi.h" "$sdkroot/usr/local/include/iBoot/boot_args_abi.h"
+fi
+
+if [ ! -f "$sdkroot/usr/local/include/CodeSignature/Entitlements.h" ]; then
+    cat > "$dst/CodeSignature-Entitlements.h" <<'HEADER'
+#ifndef CODESIGNATURE_ENTITLEMENTS_H
+#define CODESIGNATURE_ENTITLEMENTS_H
+
+#include <CoreEntitlements/CoreEntitlements.h>
+#include <CoreEntitlements/CoreEntitlementsPriv.h>
+
+#endif
+HEADER
+    sudo cp "$dst/CodeSignature-Entitlements.h" "$sdkroot/usr/local/include/CodeSignature/Entitlements.h"
 fi
 
 if [ ! -f "$sdkroot/usr/local/include/TrustCache/API.h" ]; then
