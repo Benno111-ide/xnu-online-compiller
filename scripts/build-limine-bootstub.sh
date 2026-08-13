@@ -210,6 +210,7 @@ esac
     -target "$target" \
     -nostdlib \
     -fuse-ld=lld \
+    -Wl,-no-pie \
     -Wl,-T,"$linker" \
     -Wl,--build-id=none \
     "$object" \

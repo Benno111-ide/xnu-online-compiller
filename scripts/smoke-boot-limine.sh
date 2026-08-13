@@ -18,9 +18,10 @@ fi
 mkdir -p "$out"
 monitor="$out/qemu-monitor.sock"
 screenshot="$out/limine-smoke.ppm"
+boot_screenshot="$out/limine-booted.ppm"
 report="$out/limine-smoke.txt"
 vars="$out/uefi-vars.fd"
-rm -f "$monitor" "$screenshot" "$report" "$vars"
+rm -f "$monitor" "$screenshot" "$boot_screenshot" "$report" "$vars"
 
 find_qemu_file() {
     pattern=$1
@@ -109,18 +110,22 @@ fi
 
 sleep 8
 
-python3 - "$monitor" "$screenshot" <<'PY'
+python3 - "$monitor" "$screenshot" "$boot_screenshot" <<'PY'
 import socket
 import sys
 import time
 
-monitor, screenshot = sys.argv[1:3]
+monitor, menu_screenshot, boot_screenshot = sys.argv[1:4]
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.settimeout(5)
 sock.connect(monitor)
 time.sleep(0.2)
 sock.recv(4096)
-sock.sendall(f"screendump {screenshot}\n".encode())
+sock.sendall(f"screendump {menu_screenshot}\n".encode())
+time.sleep(0.5)
+sock.sendall(b"sendkey ret\n")
+time.sleep(4)
+sock.sendall(f"screendump {boot_screenshot}\n".encode())
 time.sleep(0.5)
 sock.sendall(b"quit\n")
 sock.close()
@@ -129,62 +134,82 @@ PY
 wait "$qemu_pid" 2>/dev/null || true
 trap - EXIT INT TERM
 
-python3 - "$screenshot" "$report" <<'PY'
+python3 - "$screenshot" "$boot_screenshot" "$report" <<'PY'
 from pathlib import Path
 import sys
 
-ppm = Path(sys.argv[1])
-report = Path(sys.argv[2])
+menu_ppm = Path(sys.argv[1])
+boot_ppm = Path(sys.argv[2])
+report = Path(sys.argv[3])
 
-if not ppm.exists() or ppm.stat().st_size == 0:
-    raise SystemExit("QEMU did not produce a framebuffer dump")
+def read_ppm(ppm):
+    if not ppm.exists() or ppm.stat().st_size == 0:
+        raise SystemExit(f"QEMU did not produce framebuffer dump: {ppm}")
 
-data = ppm.read_bytes()
+    data = ppm.read_bytes()
 
-def token(offset):
-    while data[offset:offset + 1].isspace():
-        offset += 1
-    if data[offset:offset + 1] == b"#":
-        while data[offset:offset + 1] not in (b"\n", b""):
+    def token(offset):
+        while data[offset:offset + 1].isspace():
             offset += 1
-        return token(offset)
-    end = offset
-    while end < len(data) and not data[end:end + 1].isspace():
-        end += 1
-    return data[offset:end], end
+        if data[offset:offset + 1] == b"#":
+            while data[offset:offset + 1] not in (b"\n", b""):
+                offset += 1
+            return token(offset)
+        end = offset
+        while end < len(data) and not data[end:end + 1].isspace():
+            end += 1
+        return data[offset:end], end
 
-magic, pos = token(0)
-if magic != b"P6":
-    raise SystemExit(f"unsupported screenshot format: {magic!r}")
+    magic, pos = token(0)
+    if magic != b"P6":
+        raise SystemExit(f"unsupported screenshot format: {magic!r}")
 
-width_b, pos = token(pos)
-height_b, pos = token(pos)
-maxval_b, pos = token(pos)
-width = int(width_b)
-height = int(height_b)
-maxval = int(maxval_b)
-if maxval != 255:
-    raise SystemExit(f"unsupported max pixel value: {maxval}")
-while data[pos:pos + 1].isspace():
-    pos += 1
-pixels = data[pos:]
+    width_b, pos = token(pos)
+    height_b, pos = token(pos)
+    maxval_b, pos = token(pos)
+    width = int(width_b)
+    height = int(height_b)
+    maxval = int(maxval_b)
+    if maxval != 255:
+        raise SystemExit(f"unsupported max pixel value: {maxval}")
+    while data[pos:pos + 1].isspace():
+        pos += 1
+    return width, height, data[pos:]
 
-magenta = 0
-bright = 0
-for i in range(0, len(pixels) - 2, 3):
-    r, g, b = pixels[i], pixels[i + 1], pixels[i + 2]
+menu_width, menu_height, menu_pixels = read_ppm(menu_ppm)
+boot_width, boot_height, boot_pixels = read_ppm(boot_ppm)
+
+menu_magenta = 0
+menu_bright = 0
+for i in range(0, len(menu_pixels) - 2, 3):
+    r, g, b = menu_pixels[i], menu_pixels[i + 1], menu_pixels[i + 2]
     if r > 160 or g > 160 or b > 160:
-        bright += 1
+        menu_bright += 1
     if r >= 180 and g <= 90 and b >= 180:
-        magenta += 1
+        menu_magenta += 1
+
+boot_green = 0
+boot_magenta = 0
+for i in range(0, len(boot_pixels) - 2, 3):
+    r, g, b = boot_pixels[i], boot_pixels[i + 1], boot_pixels[i + 2]
+    if r <= 80 and g >= 160 and b <= 140:
+        boot_green += 1
+    if r >= 180 and g <= 90 and b >= 180:
+        boot_magenta += 1
 
 report.write_text(
-    f"width={width}\nheight={height}\nbright_pixels={bright}\n"
-    f"magenta_branding_pixels={magenta}\n",
+    f"menu_width={menu_width}\nmenu_height={menu_height}\n"
+    f"menu_bright_pixels={menu_bright}\n"
+    f"menu_magenta_branding_pixels={menu_magenta}\n"
+    f"boot_width={boot_width}\nboot_height={boot_height}\n"
+    f"boot_green_marker_pixels={boot_green}\n"
+    f"boot_magenta_marker_pixels={boot_magenta}\n",
     encoding="ascii",
 )
 print(report.read_text(encoding="ascii"), end="")
 
-if magenta < 20:
+if menu_magenta < 20:
     raise SystemExit("Limine branding colour was not visible; Limine menu likely did not load")
+if boot_green < 1000:
+    raise SystemExit("Limine did not load the boot stub marker after selecting the menu entry")
 PY

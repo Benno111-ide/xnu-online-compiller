@@ -21,10 +21,13 @@ loader path for the target architecture:
 Limine is fetched from the pinned official binary release recorded in
 `xnu-upstream.env`. CI verifies the Limine checksum, the ISO fallback EFI path,
 the embedded EFI boot image, `limine.conf`, the XNU kernel artifacts, and a
-QEMU/UEFI smoke boot that checks the Limine menu actually renders.
+QEMU/UEFI smoke boot that checks the Limine menu renders and then successfully
+loads the `bootloader.sys` ELF handoff stub.
 
 There is no local placeholder kernel source in this repository. The build fails
-unless Apple XNU's external source tree produces real kernel artifacts.
+unless Apple XNU's external source tree produces real kernel artifacts. The
+boot entry itself is a small Limine-compatible ELF stub because Limine's native
+protocol loader does not load Apple's raw Mach-O kernel artifact directly.
 
 Run the same build on an Ubuntu machine with:
 
