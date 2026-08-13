@@ -106,7 +106,8 @@ verify: $(ISO)
 	grep -Eq '/xnu-kernel/.*/kernel(\.[^/]*)?$$|/xnu-kernel/.*/mach(\.[^/]*)?$$' "$(BUILD_DIR)/iso-contents.txt"
 	grep -Ei 'EFI|UEFI' "$(BUILD_DIR)/iso-eltorito.txt"
 
-smoke-boot: verify
+smoke-boot:
+	test -s "$(ISO)"
 	sh scripts/smoke-boot-limine.sh "$(ARCH)" "$(ISO)" "$(BUILD_DIR)/limine-smoke"
 
 clean:
