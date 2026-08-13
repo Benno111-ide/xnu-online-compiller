@@ -1,0 +1,48 @@
+name: Build basic XNU ISOs
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }} ISO
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - amd64
+          - arm64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            file \
+            grub-pc-bin \
+            lld \
+            make \
+            mtools \
+            xorriso
+
+      - name: Compile kernel and create ISO
+        run: make ARCH=${{ matrix.arch }} all
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xnu-basic-${{ matrix.arch }}-iso
+          path: |
+            build/${{ matrix.arch }}/xnu-basic-${{ matrix.arch }}.elf
+            build/${{ matrix.arch }}/xnu-basic-${{ matrix.arch }}.iso
+            build/${{ matrix.arch }}/iso-contents.txt
+          if-no-files-found: error
