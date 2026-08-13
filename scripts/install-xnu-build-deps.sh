@@ -71,6 +71,7 @@ sudo mkdir -p \
     "$sdkroot/usr/local/include/CoreEntitlements/V2" \
     "$sdkroot/usr/local/include/os" \
     "$sdkroot/usr/local/include/TrustCache" \
+    "$sdkroot/usr/local/include/arm64/ppl" \
     "$sdkroot/usr/local/include/iBoot" \
     "$kernel_private_headers/AppleFeatures" \
     "$kernel_private_headers/platform"
@@ -184,6 +185,30 @@ void __firehose_buffer_tracepoint_flush(firehose_tracepoint_t tracepoint,
 #endif
 HEADER
     sudo cp "$dst/os-firehose_buffer_private.h" "$sdkroot/usr/local/include/os/firehose_buffer_private.h"
+fi
+
+if [ ! -f "$sdkroot/usr/local/include/arm64/ppl/sart.h" ]; then
+    cat > "$dst/arm64-ppl-sart.h" <<'HEADER'
+#ifndef ARM64_PPL_SART_H
+#define ARM64_PPL_SART_H
+
+static inline void
+sart_bootstrap(void)
+{
+}
+
+#endif
+HEADER
+    sudo cp "$dst/arm64-ppl-sart.h" "$sdkroot/usr/local/include/arm64/ppl/sart.h"
+fi
+
+if [ ! -f "$sdkroot/usr/local/include/arm64/ppl/uat.h" ]; then
+    cat > "$dst/arm64-ppl-uat.h" <<'HEADER'
+#ifndef ARM64_PPL_UAT_H
+#define ARM64_PPL_UAT_H
+#endif
+HEADER
+    sudo cp "$dst/arm64-ppl-uat.h" "$sdkroot/usr/local/include/arm64/ppl/uat.h"
 fi
 
 if [ ! -f "$sdkroot/usr/local/lib/kernel/libfirehose_kernel.a" ]; then
