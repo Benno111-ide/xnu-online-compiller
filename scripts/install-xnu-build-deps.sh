@@ -157,6 +157,11 @@ if [ ! -f "$sdkroot/usr/local/include/os/firehose_buffer_private.h" ]; then
 #define FIREHOSE_BUFFER_KERNEL_CHUNK_COUNT FIREHOSE_BUFFER_KERNEL_DEFAULT_CHUNK_COUNT
 #endif
 
+struct firehose_buffer_range_s {
+    uint16_t fbr_offset;
+    uint16_t fbr_length;
+};
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -165,7 +170,7 @@ firehose_buffer_t __firehose_buffer_create(size_t *size);
 bool __firehose_kernel_configuration_valid(uint8_t chunk_count, uint8_t io_pages);
 bool __firehose_merge_updates(firehose_push_reply_t update);
 firehose_tracepoint_t __firehose_buffer_tracepoint_reserve(uint64_t stamp,
-    firehose_stream_t stream, uint8_t flags, uint16_t pubsize, uint16_t privsize);
+    firehose_stream_t stream, uint16_t pubsize, uint16_t privsize, uint8_t **privdata);
 void __firehose_buffer_tracepoint_flush(firehose_tracepoint_t tracepoint,
     firehose_tracepoint_id_u tracepoint_id);
 
