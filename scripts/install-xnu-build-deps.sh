@@ -355,16 +355,86 @@ uint64_t vm_first_phys = 0;
 uint64_t vm_last_phys = 0;
 SOURCE
 
+    cat > "$dst/arm64_link_stub.s" <<'SOURCE'
+.text
+.align 2
+
+.macro ret_zero symbol
+.globl \symbol
+\symbol:
+	mov	x0, #0
+	ret
+.endmacro
+
+.macro ret_void symbol
+.globl \symbol
+\symbol:
+	ret
+.endmacro
+
+ret_void _CleanPoC_DcacheRegion_Force_nopreempt
+ret_void _CleanPoC_DcacheRegion_Force_nopreempt_nohid
+ret_void _ml_enable_monitor
+ret_zero _nvme_ppl_get_desc
+ret_zero _pmap_cs_configuration
+ret_zero _pmap_has_iofilter_protected_write
+ret_zero _pmap_iommu_alloc_contiguous_pages
+ret_zero _pmap_iommu_init
+ret_zero _pmap_iommu_ioctl
+ret_zero _pmap_iommu_iovmalloc
+ret_zero _pmap_iommu_iovmfree
+ret_zero _pmap_iommu_map
+ret_zero _pmap_iommu_unmap
+ret_zero __ZN26IOUnifiedAddressTranslator12commitUnmapsEv
+ret_zero __ZN26IOUnifiedAddressTranslator14prepareFWUnmapEyy
+ret_zero __ZN26IOUnifiedAddressTranslator17getPageTableEntryEy
+ret_zero __ZN26IOUnifiedAddressTranslator18setClientContextIDEjb
+ret_zero __ZN26IOUnifiedAddressTranslator19isPageFaultExpectedEyj
+ret_zero __ZN26IOUnifiedAddressTranslator21removeClientContextIDEv
+ret_zero __ZN26IOUnifiedAddressTranslator22registerTaskForServiceEP4taskP9IOService
+ret_zero __ZN26IOUnifiedAddressTranslator23createMappingInApertureEjP18IOMemoryDescriptorjym
+ret_zero __ZN26IOUnifiedAddressTranslator23getTotalPageTableMemoryEv
+ret_zero __ZN26IOUnifiedAddressTranslator29getFirmwareAddressSpaceHandleEv
+ret_zero __ZN26IOUnifiedAddressTranslator3mapEP11IOMemoryMapj
+ret_zero __ZN26IOUnifiedAddressTranslator5doMapEP18IOMemoryDescriptoryyj
+ret_zero __ZN26IOUnifiedAddressTranslator5unmapEP11IOMemoryMap
+ret_zero __ZN26IOUnifiedAddressTranslator7doUnmapEP18IOMemoryDescriptoryy
+ret_zero __ZN26IOUnifiedAddressTranslator7getModeEv
+ret_zero __ZN26IOUnifiedAddressTranslator8taskDiedEv
+
+.data
+.align 3
+.globl _rorgn_begin
+_rorgn_begin:
+	.quad 0
+.globl _rorgn_end
+_rorgn_end:
+	.quad 0
+.globl __ZN26IOUnifiedAddressTranslator10gMetaClassE
+__ZN26IOUnifiedAddressTranslator10gMetaClassE:
+	.quad 0
+.globl __ZN26IOUnifiedAddressTranslator10superClassE
+__ZN26IOUnifiedAddressTranslator10superClassE:
+	.quad 0
+.globl __ZTV26IOUnifiedAddressTranslator
+__ZTV26IOUnifiedAddressTranslator:
+	.quad 0
+	.quad 0
+SOURCE
+
     clang -c -arch x86_64 -mmacosx-version-min=15.5 \
         "$dst/firehose_kernel_common_stub.c" -o "$dst/firehose_kernel_common_stub.x86_64.o"
     clang -c -arch arm64e -mmacosx-version-min=15.5 \
         "$dst/firehose_kernel_common_stub.c" -o "$dst/firehose_kernel_common_stub.arm64e.o"
     clang -c -arch arm64e -mmacosx-version-min=15.5 \
         "$dst/arm64_platform_stub.c" -o "$dst/arm64_platform_stub.arm64e.o"
+    clang -c -arch arm64e -mmacosx-version-min=15.5 \
+        "$dst/arm64_link_stub.s" -o "$dst/arm64_link_stub.arm64e.o"
     libtool -static -o "$dst/libfirehose_kernel.x86_64.a" \
         "$dst/firehose_kernel_common_stub.x86_64.o"
     libtool -static -o "$dst/libfirehose_kernel.arm64e.a" \
-        "$dst/firehose_kernel_common_stub.arm64e.o" "$dst/arm64_platform_stub.arm64e.o"
+        "$dst/firehose_kernel_common_stub.arm64e.o" "$dst/arm64_platform_stub.arm64e.o" \
+        "$dst/arm64_link_stub.arm64e.o"
     lipo -create -output "$dst/libfirehose_kernel.a" \
         "$dst/libfirehose_kernel.x86_64.a" "$dst/libfirehose_kernel.arm64e.a"
     sudo cp "$dst/libfirehose_kernel.a" "$sdkroot/usr/local/lib/kernel/libfirehose_kernel.a"
