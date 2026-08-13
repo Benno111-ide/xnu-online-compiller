@@ -20,7 +20,8 @@ loader path for the target architecture:
 
 Limine is fetched from the pinned official binary release recorded in
 `xnu-upstream.env`. CI verifies the Limine checksum, the ISO fallback EFI path,
-the embedded EFI boot image, `limine.conf`, and the XNU kernel artifacts.
+the embedded EFI boot image, `limine.conf`, the XNU kernel artifacts, and a
+QEMU/UEFI smoke boot that checks the Limine menu actually renders.
 
 There is no local placeholder kernel source in this repository. The build fails
 unless Apple XNU's external source tree produces real kernel artifacts.

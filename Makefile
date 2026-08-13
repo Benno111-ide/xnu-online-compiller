@@ -22,7 +22,7 @@ else
 $(error Unsupported ARCH '$(ARCH)'; use amd64 or arm64)
 endif
 
-.PHONY: all fetch-xnu verify-xnu fetch-limine install-build-deps build-xnu iso verify clean
+.PHONY: all fetch-xnu verify-xnu fetch-limine install-build-deps build-xnu iso verify smoke-boot clean
 
 all: build-xnu iso verify
 
@@ -105,6 +105,9 @@ verify: $(ISO)
 	grep -q '/xnu-kernel/xnu-kernel-artifacts.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -Eq '/xnu-kernel/.*/kernel(\.[^/]*)?$$|/xnu-kernel/.*/mach(\.[^/]*)?$$' "$(BUILD_DIR)/iso-contents.txt"
 	grep -Ei 'EFI|UEFI' "$(BUILD_DIR)/iso-eltorito.txt"
+
+smoke-boot: verify
+	sh scripts/smoke-boot-limine.sh "$(ARCH)" "$(ISO)" "$(BUILD_DIR)/limine-smoke"
 
 clean:
 	rm -rf build

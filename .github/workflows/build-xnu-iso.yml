@@ -29,10 +29,22 @@ jobs:
           xcrun -sdk macosx --show-sdk-path
 
       - name: Install build tools
-        run: brew install cmake ninja cdrtools xorriso mtools
+        run: brew install cmake ninja cdrtools xorriso mtools qemu
 
       - name: Build Apple XNU kernel and create ISO
         run: make ARCH=${{ matrix.arch }} all
+
+      - name: Smoke boot Limine under UEFI
+        run: make ARCH=${{ matrix.arch }} smoke-boot
+
+      - name: Upload smoke boot artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-xnu-kernel-${{ matrix.arch }}-limine-smoke
+          path: |
+            build/${{ matrix.arch }}/limine-smoke/*
+          if-no-files-found: ignore
 
       - name: Upload build logs
         if: always()
@@ -51,5 +63,6 @@ jobs:
             build/${{ matrix.arch }}/apple-xnu-kernel-${{ matrix.arch }}.iso
             build/${{ matrix.arch }}/iso-contents.txt
             build/${{ matrix.arch }}/iso-eltorito.txt
+            build/${{ matrix.arch }}/limine-smoke/*
             build/${{ matrix.arch }}/xnu-build/artifacts/xnu-kernel-artifacts.txt
           if-no-files-found: error
