@@ -37,7 +37,12 @@ cat > "$kernel_c" <<'SOURCE'
 
 #define LIMINE_COMMON_MAGIC 0xc7b1dd30df4c8b88, 0x0a82e883a194f07b
 #define LIMINE_FRAMEBUFFER_REQUEST { LIMINE_COMMON_MAGIC, 0x9d5827dcd881dd75, 0xa3148604f6fab11b }
-#define LIMINE_BASE_REVISION(N) uint64_t limine_base_revision[3] = { 0xf9562b2d5c95a6c8, 0x6a7b384944536bdc, (N) }
+#define LIMINE_REQUESTS_START_MARKER { 0xf6b8f4b39de7d1ae, 0xfab91a6940fcb9cf, 0x785c6ed015d3e316, 0x181e920a7852b9d9 }
+#define LIMINE_REQUESTS_END_MARKER { 0xadc0e0531bb10d03, 0x9572709f31764c62 }
+#define LIMINE_BASE_REVISION(N) { 0xf9562b2d5c95a6c8, 0x6a7b384944536bdc, (N) }
+
+__attribute__((used, section(".limine_requests_start")))
+static volatile uint64_t limine_requests_start_marker[4] = LIMINE_REQUESTS_START_MARKER;
 
 struct limine_framebuffer {
     void *address;
@@ -70,7 +75,7 @@ struct limine_framebuffer_request {
 };
 
 __attribute__((used, section(".limine_requests")))
-static volatile LIMINE_BASE_REVISION(1);
+static volatile uint64_t limine_base_revision[3] = LIMINE_BASE_REVISION(4);
 
 __attribute__((used, section(".limine_requests")))
 static volatile struct limine_framebuffer_request framebuffer_request = {
@@ -78,6 +83,9 @@ static volatile struct limine_framebuffer_request framebuffer_request = {
     .revision = 0,
     .response = 0
 };
+
+__attribute__((used, section(".limine_requests_end")))
+static volatile uint64_t limine_requests_end_marker[2] = LIMINE_REQUESTS_END_MARKER;
 
 static uint32_t make_pixel(const struct limine_framebuffer *fb,
                            uint8_t r, uint8_t g, uint8_t b) {
@@ -158,7 +166,9 @@ SECTIONS
     . = 0xffffffff80000000;
 
     .limine_requests : {
+        KEEP(*(.limine_requests_start))
         KEEP(*(.limine_requests))
+        KEEP(*(.limine_requests_end))
     } :requests
 
     . = ALIGN(0x1000);
