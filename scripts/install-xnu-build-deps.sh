@@ -13,59 +13,59 @@ fi
 sdkroot="$(xcrun -sdk macosx --show-sdk-path)"
 availability_tool="$sdkroot/usr/local/libexec/availability.pl"
 
-if [ -x "$availability_tool" ]; then
-    echo "Found availability.pl in SDK: $availability_tool"
-    exit 0
-fi
-
-src="$dst/AvailabilityVersions"
-obj="$dst/AvailabilityVersions-obj"
-sym="$dst/AvailabilityVersions-sym"
-install_root="$dst/AvailabilityVersions-dst"
-
-rm -rf "$src" "$obj" "$sym" "$install_root"
 mkdir -p "$dst"
 
-git init "$src"
-git -C "$src" remote add origin "$AVAILABILITY_VERSIONS_REPO_URL"
-git -C "$src" fetch --depth 1 origin "$AVAILABILITY_VERSIONS_COMMIT"
-git -C "$src" checkout --detach FETCH_HEAD
+if [ -x "$availability_tool" ]; then
+    echo "Found availability.pl in SDK: $availability_tool"
+else
+    src="$dst/AvailabilityVersions"
+    obj="$dst/AvailabilityVersions-obj"
+    sym="$dst/AvailabilityVersions-sym"
+    install_root="$dst/AvailabilityVersions-dst"
 
-actual_commit="$(git -C "$src" rev-parse HEAD)"
-if [ "$actual_commit" != "$AVAILABILITY_VERSIONS_COMMIT" ]; then
-    echo "Expected AvailabilityVersions $AVAILABILITY_VERSIONS_COMMIT, got $actual_commit" >&2
-    exit 1
-fi
+    rm -rf "$src" "$obj" "$sym" "$install_root"
+    git init "$src"
+    git -C "$src" remote add origin "$AVAILABILITY_VERSIONS_REPO_URL"
+    git -C "$src" fetch --depth 1 origin "$AVAILABILITY_VERSIONS_COMMIT"
+    git -C "$src" checkout --detach FETCH_HEAD
 
-cmake_bin="$(command -v cmake)"
-ninja_bin="$(command -v ninja)"
+    actual_commit="$(git -C "$src" rev-parse HEAD)"
+    if [ "$actual_commit" != "$AVAILABILITY_VERSIONS_COMMIT" ]; then
+        echo "Expected AvailabilityVersions $AVAILABILITY_VERSIONS_COMMIT, got $actual_commit" >&2
+        exit 1
+    fi
 
-make -C "$src" \
-    CMAKE="$cmake_bin" \
-    NINJA="$ninja_bin" \
-    SRCROOT="$(pwd)/$src" \
-    OBJROOT="$(pwd)/$obj" \
-    SYMROOT="$(pwd)/$sym" \
-    DSTROOT="$(pwd)/$install_root" \
-    install
+    cmake_bin="$(command -v cmake)"
+    ninja_bin="$(command -v ninja)"
 
-if [ ! -x "$install_root/usr/local/libexec/availability.pl" ]; then
-    echo "AvailabilityVersions did not produce usr/local/libexec/availability.pl" >&2
-    exit 1
-fi
+    make -C "$src" \
+        CMAKE="$cmake_bin" \
+        NINJA="$ninja_bin" \
+        SRCROOT="$(pwd)/$src" \
+        OBJROOT="$(pwd)/$obj" \
+        SYMROOT="$(pwd)/$sym" \
+        DSTROOT="$(pwd)/$install_root" \
+        install
 
-sudo mkdir -p "$sdkroot/usr/local"
-sudo rsync -a "$install_root/usr/local/" "$sdkroot/usr/local/"
+    if [ ! -x "$install_root/usr/local/libexec/availability.pl" ]; then
+        echo "AvailabilityVersions did not produce usr/local/libexec/availability.pl" >&2
+        exit 1
+    fi
 
-if [ ! -x "$availability_tool" ]; then
-    echo "Failed to install availability.pl into $availability_tool" >&2
-    exit 1
+    sudo mkdir -p "$sdkroot/usr/local"
+    sudo rsync -a "$install_root/usr/local/" "$sdkroot/usr/local/"
+
+    if [ ! -x "$availability_tool" ]; then
+        echo "Failed to install availability.pl into $availability_tool" >&2
+        exit 1
+    fi
 fi
 
 kernel_private_headers="$sdkroot/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders"
 sudo mkdir -p \
     "$sdkroot/usr/local/include/kernel" \
     "$sdkroot/usr/local/include/CodeSignature" \
+    "$sdkroot/usr/local/include/CoreEntitlements/V2" \
     "$sdkroot/usr/local/include/TrustCache" \
     "$sdkroot/usr/local/include/iBoot" \
     "$kernel_private_headers/AppleFeatures" \
@@ -103,6 +103,34 @@ if [ ! -f "$sdkroot/usr/local/include/CodeSignature/Entitlements.h" ]; then
 #endif
 HEADER
     sudo cp "$dst/CodeSignature-Entitlements.h" "$sdkroot/usr/local/include/CodeSignature/Entitlements.h"
+fi
+
+if [ ! -f "$sdkroot/usr/local/include/CoreEntitlements/V2/API.h" ]; then
+    cat > "$dst/CoreEntitlements-V2-API.h" <<'HEADER'
+#ifndef CORE_ENTITLEMENTS_V2_API_H
+#define CORE_ENTITLEMENTS_V2_API_H
+
+#include <CoreEntitlements/CoreEntitlements.h>
+
+#endif
+HEADER
+    sudo cp "$dst/CoreEntitlements-V2-API.h" "$sdkroot/usr/local/include/CoreEntitlements/V2/API.h"
+fi
+
+if [ ! -f "$sdkroot/usr/local/include/CoreEntitlements/V2/Kernel.h" ]; then
+    cat > "$dst/CoreEntitlements-V2-Kernel.h" <<'HEADER'
+#ifndef CORE_ENTITLEMENTS_V2_KERNEL_H
+#define CORE_ENTITLEMENTS_V2_KERNEL_H
+
+#include <stdint.h>
+
+typedef struct CEKernelAPI {
+    uint64_t version;
+} CEKernelAPI_t;
+
+#endif
+HEADER
+    sudo cp "$dst/CoreEntitlements-V2-Kernel.h" "$sdkroot/usr/local/include/CoreEntitlements/V2/Kernel.h"
 fi
 
 if [ ! -f "$sdkroot/usr/local/include/TrustCache/API.h" ]; then
