@@ -97,6 +97,11 @@ SOURCE
 .endmacro
 SOURCE
     fi
+
+    vmapple_config="$src/pexpert/pexpert/arm64/VMAPPLE.h"
+    if [ -f "$vmapple_config" ] && ! grep -q "NO_CPU_OVRD" "$vmapple_config"; then
+        perl -0pi -e 's@(#define HAS_PARAVIRTUALIZED_CTRR\s+1\s*\n)@$1#define NO_CPU_OVRD                1\n@' "$vmapple_config"
+    fi
 fi
 
 : "${RC_DARWIN_KERNEL_VERSION:=9999.0.0}"
