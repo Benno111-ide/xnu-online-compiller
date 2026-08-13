@@ -1,4 +1,4 @@
-name: Build basic XNU ISOs
+name: Build Apple XNU kernel ISOs
 
 on:
   push:
@@ -9,8 +9,8 @@ on:
 
 jobs:
   build:
-    name: Build ${{ matrix.arch }} ISO
-    runs-on: ubuntu-24.04
+    name: Build Apple XNU ${{ matrix.arch }} kernel ISO
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:
@@ -22,24 +22,24 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install build tools
+      - name: Select Xcode
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            file \
-            genisoimage \
-            git \
-            make \
-            xorriso
+          sudo xcode-select --switch /Applications/Xcode.app
+          xcodebuild -version
+          xcrun -sdk macosx --show-sdk-path
 
-      - name: Fetch Apple XNU and create source ISO
+      - name: Install ISO tool
+        run: brew install cdrtools xorriso
+
+      - name: Build Apple XNU kernel and create ISO
         run: make ARCH=${{ matrix.arch }} all
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
         with:
-          name: apple-xnu-source-${{ matrix.arch }}-iso
+          name: apple-xnu-kernel-${{ matrix.arch }}-iso
           path: |
-            build/${{ matrix.arch }}/apple-xnu-source-${{ matrix.arch }}.iso
+            build/${{ matrix.arch }}/apple-xnu-kernel-${{ matrix.arch }}.iso
             build/${{ matrix.arch }}/iso-contents.txt
+            build/${{ matrix.arch }}/xnu-build/artifacts/xnu-kernel-artifacts.txt
           if-no-files-found: error
