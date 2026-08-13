@@ -59,7 +59,7 @@ verify: $(ISO)
 	test -s $(ISO)
 	file $(KERNEL)
 	file $(ISO)
-	xorriso -indev $(ISO) -find / -type f -print | tee $(BUILD_DIR)/iso-contents.txt
+	isoinfo -R -f -i $(ISO) | tee $(BUILD_DIR)/iso-contents.txt
 	grep -q '/boot/xnu-basic-$(ARCH).elf' $(BUILD_DIR)/iso-contents.txt
 	grep -q '/BUILD-LABEL.txt' $(BUILD_DIR)/iso-contents.txt
 
