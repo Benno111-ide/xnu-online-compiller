@@ -9,6 +9,7 @@ XNU_BUILD_DIR := $(BUILD_DIR)/xnu-build
 XNU_ARTIFACTS_DIR := $(XNU_BUILD_DIR)/artifacts
 ISO := $(BUILD_DIR)/apple-xnu-kernel-$(ARCH).iso
 EFI_DIR := $(BUILD_DIR)/efi
+EFI_IMAGE_SIZE_KB := 131072
 LIMINE_DIR := build/limine
 
 ifeq ($(ARCH),amd64)
@@ -51,20 +52,22 @@ $(XNU_STAMP): xnu-upstream.env | $(BUILD_DIR)
 
 $(ISO): build-xnu fetch-limine $(XNU_STAMP)
 	rm -rf "$(ISO_ROOT)"
-	mkdir -p "$(ISO_ROOT)/xnu-kernel" "$(ISO_ROOT)/EFI/BOOT" "$(BUILD_DIR)/efi"
+	mkdir -p "$(ISO_ROOT)/xnu-kernel" "$(ISO_ROOT)/boot" "$(ISO_ROOT)/EFI/BOOT" "$(BUILD_DIR)/efi"
 	printf 'apple-xnu-kernel-%s\n' '$(ARCH)' > "$(ISO_ROOT)/BUILD-LABEL.txt"
 	cp "$(XNU_STAMP)" "$(ISO_ROOT)/XNU-UPSTREAM.txt"
 	. ./xnu-upstream.env; \
 	printf 'repo=%s\nversion=%s\nbinary_url=%s\nsha256=%s\n' "$$LIMINE_REPO_URL" "$$LIMINE_VERSION" "$$LIMINE_BINARY_URL" "$$LIMINE_BINARY_SHA256" > "$(ISO_ROOT)/LIMINE-UPSTREAM.txt"
-	printf 'TIMEOUT=5\n# Limine EFI is installed as the fallback UEFI boot manager.\n# Apple XNU kernel artifacts are packaged under boot:///xnu-kernel/.\n' > "$(ISO_ROOT)/limine.cfg"
+	cp limine.cfg "$(ISO_ROOT)/limine.cfg"
 	tar -C "$(XNU_ARTIFACTS_DIR)" -cf - . | tar -C "$(ISO_ROOT)/xnu-kernel" -xf -
+	sh scripts/install-bootloader-sys.sh "$(XNU_ARTIFACTS_DIR)" "$(ISO_ROOT)/boot/bootloader.sys"
 	cp "$(LIMINE_DIR)/$(EFI_BOOT_NAME)" "$(EFI_DIR)/$(EFI_BOOT_NAME)"
 	cp "$(EFI_DIR)/$(EFI_BOOT_NAME)" "$(ISO_ROOT)/EFI/BOOT/$(EFI_BOOT_NAME)"
-	dd if=/dev/zero of="$(ISO_ROOT)/EFI/efiboot.img" bs=1024 count=1440 >/dev/null 2>&1
-	mformat -i "$(ISO_ROOT)/EFI/efiboot.img" -f 1440 ::
-	mmd -i "$(ISO_ROOT)/EFI/efiboot.img" ::/EFI ::/EFI/BOOT
+	dd if=/dev/zero of="$(ISO_ROOT)/EFI/efiboot.img" bs=1024 count="$(EFI_IMAGE_SIZE_KB)" >/dev/null 2>&1
+	mformat -i "$(ISO_ROOT)/EFI/efiboot.img" ::
+	mmd -i "$(ISO_ROOT)/EFI/efiboot.img" ::/EFI ::/EFI/BOOT ::/boot
 	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(EFI_DIR)/$(EFI_BOOT_NAME)" "::/EFI/BOOT/$(EFI_BOOT_NAME)"
 	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/limine.cfg" "::/limine.cfg"
+	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/boot/bootloader.sys" "::/boot/bootloader.sys"
 	xorriso -as mkisofs -quiet -J -R -V APPLE_XNU_$(ARCH) -eltorito-alt-boot -e EFI/efiboot.img -no-emul-boot -o "$@" "$(ISO_ROOT)"
 
 verify: $(ISO)
@@ -76,10 +79,12 @@ verify: $(ISO)
 	grep -q '/XNU-UPSTREAM.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/LIMINE-UPSTREAM.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/limine.cfg' "$(BUILD_DIR)/iso-contents.txt"
+	grep -q '/boot/bootloader.sys' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/EFI/BOOT/$(EFI_BOOT_NAME)' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/EFI/efiboot.img' "$(BUILD_DIR)/iso-contents.txt"
-	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/limine.cfg | grep -q 'Limine EFI'
+	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/limine.cfg | grep -q '/OS8'
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/BOOT/$(EFI_BOOT_NAME)" >/dev/null
+	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/boot/bootloader.sys" >/dev/null
 	grep -q '/xnu-kernel/xnu-kernel-artifacts.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -Eq '/xnu-kernel/.*/kernel(\.release)?$$|/xnu-kernel/.*/mach(\.release)?$$' "$(BUILD_DIR)/iso-contents.txt"
 	grep -Ei 'EFI|UEFI' "$(BUILD_DIR)/iso-eltorito.txt"
