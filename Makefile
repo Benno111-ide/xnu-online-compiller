@@ -8,11 +8,14 @@ ISO_ROOT := $(BUILD_DIR)/iso-root
 XNU_BUILD_DIR := $(BUILD_DIR)/xnu-build
 XNU_ARTIFACTS_DIR := $(XNU_BUILD_DIR)/artifacts
 ISO := $(BUILD_DIR)/apple-xnu-kernel-$(ARCH).iso
+EFI_DIR := $(BUILD_DIR)/efi
 
 ifeq ($(ARCH),amd64)
 XNU_ARCH := X86_64
+EFI_BOOT_NAME := BOOTX64.EFI
 else ifeq ($(ARCH),arm64)
 XNU_ARCH := ARM64
+EFI_BOOT_NAME := BOOTAA64.EFI
 else
 $(error Unsupported ARCH '$(ARCH)'; use amd64 or arm64)
 endif
@@ -44,20 +47,30 @@ $(XNU_STAMP): xnu-upstream.env | $(BUILD_DIR)
 
 $(ISO): build-xnu $(XNU_STAMP)
 	rm -rf "$(ISO_ROOT)"
-	mkdir -p "$(ISO_ROOT)/xnu-kernel"
+	mkdir -p "$(ISO_ROOT)/xnu-kernel" "$(ISO_ROOT)/EFI/BOOT" "$(BUILD_DIR)/efi"
 	printf 'apple-xnu-kernel-%s\n' '$(ARCH)' > "$(ISO_ROOT)/BUILD-LABEL.txt"
 	cp "$(XNU_STAMP)" "$(ISO_ROOT)/XNU-UPSTREAM.txt"
 	tar -C "$(XNU_ARTIFACTS_DIR)" -cf - . | tar -C "$(ISO_ROOT)/xnu-kernel" -xf -
-	xorriso -as mkisofs -quiet -J -R -V APPLE_XNU_$(ARCH) -o "$@" "$(ISO_ROOT)"
+	python3 scripts/create-efi-loader.py "$(ARCH)" "$(EFI_DIR)/$(EFI_BOOT_NAME)"
+	cp "$(EFI_DIR)/$(EFI_BOOT_NAME)" "$(ISO_ROOT)/EFI/BOOT/$(EFI_BOOT_NAME)"
+	dd if=/dev/zero of="$(ISO_ROOT)/EFI/efiboot.img" bs=1024 count=1440 >/dev/null 2>&1
+	mformat -i "$(ISO_ROOT)/EFI/efiboot.img" -f 1440 ::
+	mmd -i "$(ISO_ROOT)/EFI/efiboot.img" ::/EFI ::/EFI/BOOT
+	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(EFI_DIR)/$(EFI_BOOT_NAME)" "::/EFI/BOOT/$(EFI_BOOT_NAME)"
+	xorriso -as mkisofs -quiet -J -R -V APPLE_XNU_$(ARCH) -eltorito-alt-boot -e EFI/efiboot.img -no-emul-boot -o "$@" "$(ISO_ROOT)"
 
 verify: $(ISO)
 	test -s "$(ISO)"
 	file "$(ISO)"
 	isoinfo -R -f -i "$(ISO)" | tee "$(BUILD_DIR)/iso-contents.txt"
+	xorriso -indev "$(ISO)" -report_el_torito plain 2>/dev/null | tee "$(BUILD_DIR)/iso-eltorito.txt"
 	grep -q '/BUILD-LABEL.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/XNU-UPSTREAM.txt' "$(BUILD_DIR)/iso-contents.txt"
+	grep -q '/EFI/BOOT/$(EFI_BOOT_NAME)' "$(BUILD_DIR)/iso-contents.txt"
+	grep -q '/EFI/efiboot.img' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/xnu-kernel/xnu-kernel-artifacts.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -Eq '/xnu-kernel/.*/kernel(\.release)?$$|/xnu-kernel/.*/mach(\.release)?$$' "$(BUILD_DIR)/iso-contents.txt"
+	grep -Ei 'EFI|UEFI' "$(BUILD_DIR)/iso-eltorito.txt"
 
 clean:
 	rm -rf build
