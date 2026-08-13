@@ -108,7 +108,8 @@ verify: $(ISO)
 
 smoke-boot:
 	test -s "$(ISO)"
-	sh scripts/smoke-boot-limine.sh "$(ARCH)" "$(ISO)" "$(BUILD_DIR)/limine-smoke"
+	test -s "$(ISO_ROOT)/EFI/efiboot.img"
+	sh scripts/smoke-boot-limine.sh "$(ARCH)" "$(ISO_ROOT)/EFI/efiboot.img" "$(BUILD_DIR)/limine-smoke"
 
 clean:
 	rm -rf build

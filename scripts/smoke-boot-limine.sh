@@ -2,16 +2,16 @@
 set -eu
 
 if [ "$#" -ne 3 ]; then
-    echo "usage: $0 <amd64|arm64> <iso-path> <output-dir>" >&2
+    echo "usage: $0 <amd64|arm64> <efi-boot-image> <output-dir>" >&2
     exit 2
 fi
 
 arch=$1
-iso=$2
+boot_image=$2
 out=$3
 
-if [ ! -s "$iso" ]; then
-    echo "missing ISO: $iso" >&2
+if [ ! -s "$boot_image" ]; then
+    echo "missing EFI boot image: $boot_image" >&2
     exit 1
 fi
 
@@ -48,14 +48,14 @@ case "$arch" in
         firmware=$(find_qemu_file edk2-x86_64-code.fd)
         vars_template=$(find_qemu_file edk2-i386-vars.fd || true)
         machine_args="-machine q35 -device VGA"
-        cdrom_args="-drive file=$iso,media=cdrom,if=ide,readonly=on"
+        boot_args="-drive if=none,id=bootdisk,file=$boot_image,format=raw,readonly=on -device virtio-blk-pci,drive=bootdisk,bootindex=1"
         ;;
     arm64)
         qemu=qemu-system-aarch64
         firmware=$(find_qemu_file edk2-aarch64-code.fd)
         vars_template=$(find_qemu_file edk2-arm-vars.fd || find_qemu_file edk2-aarch64-vars.fd || true)
-        machine_args="-machine virt -cpu cortex-a57 -device ramfb -device qemu-xhci"
-        cdrom_args="-drive if=none,id=cdrom,file=$iso,media=cdrom,readonly=on -device usb-storage,drive=cdrom,bootindex=1"
+        machine_args="-machine virt -cpu cortex-a57 -device ramfb"
+        boot_args="-drive if=none,id=bootdisk,file=$boot_image,format=raw,readonly=on -device virtio-blk-device,drive=bootdisk,bootindex=1"
         ;;
     *)
         echo "unsupported architecture: $arch" >&2
@@ -76,8 +76,8 @@ set -- "$qemu" \
     -m 768M \
     -drive "if=pflash,format=raw,readonly=on,file=$firmware" \
     -drive "if=pflash,format=raw,file=$vars" \
-    $cdrom_args \
-    -boot d \
+    $boot_args \
+    -boot menu=off \
     -display vnc=127.0.0.1:0,to=99 \
     -monitor "unix:$monitor,server,nowait" \
     -serial none \
