@@ -37,6 +37,13 @@ build_log="$out_abs/xnu-build.log"
 rm -rf "$objroot" "$dstroot" "$symroot" "$artifact_root" "$manifest" "$build_log"
 mkdir -p "$objroot" "$dstroot" "$symroot" "$artifact_root"
 
+if [ "$arch" = "arm64" ]; then
+    arm64_macos_config="$src/config/MASTER.arm64.MacOSX"
+    if [ -f "$arm64_macos_config" ] && ! grep -q "KERNEL_BASE =.*nos_arm_asm.*nos_arm_pmap" "$arm64_macos_config"; then
+        perl -0pi -e 's/(KERNEL_BASE =\s*\[\s*arm64\b)(?![^\]]*nos_arm_asm)/$1 nos_arm_asm nos_arm_pmap/' "$arm64_macos_config"
+    fi
+fi
+
 : "${RC_DARWIN_KERNEL_VERSION:=9999.0.0}"
 
 echo "Building Apple XNU $xnu_arch RELEASE kernel"

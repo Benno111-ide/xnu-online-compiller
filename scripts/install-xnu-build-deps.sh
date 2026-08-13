@@ -265,6 +265,60 @@ uat_get_desc(void)
     return 0;
 }
 
+uintptr_t
+sart_get_desc(void)
+{
+    return 0;
+}
+
+uintptr_t
+t6000dart_get_desc(void)
+{
+    return 0;
+}
+
+uintptr_t
+t6000dart_vo_tte(void)
+{
+    return 0;
+}
+
+uintptr_t
+t8020dart_get_desc(void)
+{
+    return 0;
+}
+
+uintptr_t
+t8020dart_vo_tte(void)
+{
+    return 0;
+}
+
+uintptr_t
+t8110dart_get_desc(void)
+{
+    return 0;
+}
+
+uintptr_t
+t8110dart_max_translation_levels(void)
+{
+    return 0;
+}
+
+uintptr_t
+t8110dart_vo_tt_index(void)
+{
+    return 0;
+}
+
+uintptr_t
+t8110dart_vo_tte(void)
+{
+    return 0;
+}
+
 void
 thread_bootstrap_return(void)
 {
