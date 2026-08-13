@@ -138,6 +138,7 @@ if [ ! -f "$sdkroot/usr/local/include/TrustCache/API.h" ]; then
 #ifndef TRUSTCACHE_API_H
 #define TRUSTCACHE_API_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -145,7 +146,9 @@ if [ ! -f "$sdkroot/usr/local/include/TrustCache/API.h" ]; then
 #define kUUIDSize 16
 
 typedef struct {
+    uint8_t component;
     uint32_t error;
+    uint32_t uniqueError;
 } TCReturn_t;
 
 enum {
@@ -168,9 +171,10 @@ typedef enum {
 } TCType_t;
 
 typedef enum {
-    kTCQueryTypeAll = 0,
+    kTCQueryTypeStatic = 0,
     kTCQueryTypeLoadable = 1,
-    kTCQueryTypeTotal = 2
+    kTCQueryTypeAll = 2,
+    kTCQueryTypeTotal = 3
 } TCQueryType_t;
 
 typedef uint64_t TCCapabilities_t;
@@ -183,8 +187,26 @@ typedef struct TrustCache {
     uintptr_t opaque[4];
 } TrustCache_t;
 
+typedef struct TrustCacheTypeConfig {
+    const char *entitlementValue;
+} TrustCacheTypeConfig_t;
+
+static const TrustCacheTypeConfig_t TCTypeConfig[kTCTypeTotal] __attribute__((unused)) = {
+    [kTCTypeInvalid] = { NULL },
+    [kTCTypeStatic] = { NULL },
+    [kTCTypeEngineering] = { NULL },
+    [kTCTypeLegacy] = { NULL },
+    [kTCTypeLTRS] = { "ltrs" },
+    [kTCTypeDTRS] = { "dtrs" },
+    [kTCTypeCryptex1BootOS] = { "cryptex1.boot.os" },
+    [kTCTypeCryptex1BootApp] = { "cryptex1.boot.app" }
+};
+
 typedef struct TrustCacheRuntime {
-    uintptr_t opaque[4];
+    bool allowSecondStaticTC;
+    bool allowEngineeringTC;
+    bool allowLegacyTC;
+    uint32_t img4Runtime;
 } TrustCacheRuntime_t;
 
 typedef struct TrustCacheMutableRuntime {
@@ -195,6 +217,22 @@ typedef struct TrustCacheQueryToken {
     const TrustCache_t *trustCache;
     const void *trustCacheEntry;
 } TrustCacheQueryToken_t;
+
+static inline void
+trustCacheInitializeRuntime(
+    TrustCacheRuntime_t *runtime,
+    TrustCacheMutableRuntime_t *mutableRuntime,
+    bool allowSecondStaticTC,
+    bool allowEngineeringTC,
+    bool allowLegacyTC,
+    uint32_t img4Runtime)
+{
+    (void)mutableRuntime;
+    runtime->allowSecondStaticTC = allowSecondStaticTC;
+    runtime->allowEngineeringTC = allowEngineeringTC;
+    runtime->allowLegacyTC = allowLegacyTC;
+    runtime->img4Runtime = img4Runtime;
+}
 
 #endif
 HEADER
