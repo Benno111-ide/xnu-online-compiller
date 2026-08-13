@@ -47,6 +47,47 @@ if [ "$arch" = "arm64" ]; then
     if [ -f "$arm_pmap" ] && ! grep -q "XNU_OPEN_SOURCE_ARM64_PMAP_COMPAT" "$arm_pmap"; then
         perl -0pi -e 's@(#ifdef CONFIG_XNUPOST\s*\n#include <tests/xnupost.h>\s*\n#endif\s*\n)@$1\n#ifndef XNU_OPEN_SOURCE_ARM64_PMAP_COMPAT\n#define XNU_OPEN_SOURCE_ARM64_PMAP_COMPAT\nstatic void pmap_ppl_lockdown_page(vm_address_t kva, uint64_t lockdown_flag, bool ppl_writable);\nstatic void pmap_ppl_unlockdown_page(vm_address_t kva, uint64_t lockdown_flag, bool ppl_writable);\nstatic void pmap_phys_write_disable(vm_address_t va);\n#ifndef ptep_get_iommu\n#define ptep_get_iommu(pte_p) ((void *)0)\n#endif\n#define pmap_ppl_lockdown_pages(kva, size, lockdown_flag, ppl_writable) do { \\\n    for (vm_address_t _xnu_kva = trunc_page(kva), _xnu_end = round_page((kva) + (size)); \\\n        _xnu_kva < _xnu_end; _xnu_kva += PAGE_SIZE) { \\\n        pmap_ppl_lockdown_page(_xnu_kva, lockdown_flag, ppl_writable); \\\n    } \\\n} while (0)\n#define pmap_ppl_unlockdown_pages(kva, size, lockdown_flag, ppl_writable) do { \\\n    for (vm_address_t _xnu_kva = trunc_page(kva), _xnu_end = round_page((kva) + (size)); \\\n        _xnu_kva < _xnu_end; _xnu_kva += PAGE_SIZE) { \\\n        pmap_ppl_unlockdown_page(_xnu_kva, lockdown_flag, ppl_writable); \\\n    } \\\n} while (0)\n#endif\n@' "$arm_pmap"
     fi
+
+    rorgn_ppl="$src/osfmk/arm64/amcc_rorgn_ppl.c"
+    if [ ! -f "$rorgn_ppl" ]; then
+        cat > "$rorgn_ppl" <<'SOURCE'
+#include <stdbool.h>
+#include <mach/vm_types.h>
+
+void
+rorgn_stash_range(void)
+{
+}
+
+void
+rorgn_lockdown(void)
+{
+}
+
+bool
+rorgn_contains(vm_offset_t addr, vm_size_t size, bool defval)
+{
+	(void)addr;
+	(void)size;
+	return defval;
+}
+
+void
+rorgn_validate_core(void)
+{
+}
+SOURCE
+    fi
+
+    for rorgn_missing in \
+        "$src/osfmk/arm64/amcc_rorgn_ppl_amcc.c" \
+        "$src/osfmk/arm64/amcc_rorgn_common.c" \
+        "$src/osfmk/arm64/amcc_rorgn_pv_ctrr.c"
+    do
+        if [ ! -f "$rorgn_missing" ]; then
+            printf '/* Public XNU standalone ARM64 RORGN placeholder. */\n' > "$rorgn_missing"
+        fi
+    done
 fi
 
 : "${RC_DARWIN_KERNEL_VERSION:=9999.0.0}"
