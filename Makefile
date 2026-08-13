@@ -1,6 +1,7 @@
 ARCH ?= amd64
 XNU_SOURCE_DIR ?= build/xnu-source
 
+BUILD_DEPS_DIR := build/xnu-build-deps
 BUILD_DIR := build/$(ARCH)
 XNU_STAMP := $(BUILD_DIR)/xnu-upstream-stamp.txt
 ISO_ROOT := $(BUILD_DIR)/iso-root
@@ -16,7 +17,7 @@ else
 $(error Unsupported ARCH '$(ARCH)'; use amd64 or arm64)
 endif
 
-.PHONY: all fetch-xnu verify-xnu build-xnu iso verify clean
+.PHONY: all fetch-xnu verify-xnu install-build-deps build-xnu iso verify clean
 
 all: build-xnu iso verify
 
@@ -26,7 +27,10 @@ fetch-xnu:
 verify-xnu: fetch-xnu
 	sh scripts/verify-xnu-source.sh "$(XNU_SOURCE_DIR)"
 
-build-xnu: verify-xnu
+install-build-deps:
+	sh scripts/install-xnu-build-deps.sh "$(BUILD_DEPS_DIR)"
+
+build-xnu: verify-xnu install-build-deps
 	sh scripts/build-xnu-kernel.sh "$(ARCH)" "$(XNU_SOURCE_DIR)" "$(XNU_BUILD_DIR)"
 
 iso: $(ISO)

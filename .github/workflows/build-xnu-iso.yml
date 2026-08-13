@@ -28,8 +28,8 @@ jobs:
           xcodebuild -version
           xcrun -sdk macosx --show-sdk-path
 
-      - name: Install ISO tool
-        run: brew install cdrtools xorriso
+      - name: Install build tools
+        run: brew install cmake ninja cdrtools xorriso
 
       - name: Build Apple XNU kernel and create ISO
         run: make ARCH=${{ matrix.arch }} all
