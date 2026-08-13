@@ -57,16 +57,25 @@ $(ISO): build-xnu fetch-limine $(XNU_STAMP)
 	cp "$(XNU_STAMP)" "$(ISO_ROOT)/XNU-UPSTREAM.txt"
 	. ./xnu-upstream.env; \
 	printf 'repo=%s\nversion=%s\nbinary_url=%s\nsha256=%s\n' "$$LIMINE_REPO_URL" "$$LIMINE_VERSION" "$$LIMINE_BINARY_URL" "$$LIMINE_BINARY_SHA256" > "$(ISO_ROOT)/LIMINE-UPSTREAM.txt"
-	cp limine.cfg "$(ISO_ROOT)/limine.cfg"
+	cp limine.conf "$(ISO_ROOT)/limine.conf"
+	mkdir -p "$(ISO_ROOT)/boot/limine" "$(ISO_ROOT)/limine"
+	cp "$(ISO_ROOT)/limine.conf" "$(ISO_ROOT)/boot/limine/limine.conf"
+	cp "$(ISO_ROOT)/limine.conf" "$(ISO_ROOT)/boot/limine.conf"
+	cp "$(ISO_ROOT)/limine.conf" "$(ISO_ROOT)/limine/limine.conf"
+	cp "$(ISO_ROOT)/limine.conf" "$(ISO_ROOT)/EFI/BOOT/limine.conf"
 	tar -C "$(XNU_ARTIFACTS_DIR)" -cf - . | tar -C "$(ISO_ROOT)/xnu-kernel" -xf -
 	sh scripts/install-bootloader-sys.sh "$(XNU_ARTIFACTS_DIR)" "$(ISO_ROOT)/boot/bootloader.sys"
 	cp "$(LIMINE_DIR)/$(EFI_BOOT_NAME)" "$(EFI_DIR)/$(EFI_BOOT_NAME)"
 	cp "$(EFI_DIR)/$(EFI_BOOT_NAME)" "$(ISO_ROOT)/EFI/BOOT/$(EFI_BOOT_NAME)"
 	dd if=/dev/zero of="$(ISO_ROOT)/EFI/efiboot.img" bs=1024 count="$(EFI_IMAGE_SIZE_KB)" >/dev/null 2>&1
 	mformat -i "$(ISO_ROOT)/EFI/efiboot.img" ::
-	mmd -i "$(ISO_ROOT)/EFI/efiboot.img" ::/EFI ::/EFI/BOOT ::/boot
+	mmd -i "$(ISO_ROOT)/EFI/efiboot.img" ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine ::/limine
 	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(EFI_DIR)/$(EFI_BOOT_NAME)" "::/EFI/BOOT/$(EFI_BOOT_NAME)"
-	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/limine.cfg" "::/limine.cfg"
+	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/limine.conf" "::/limine.conf"
+	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/limine.conf" "::/EFI/BOOT/limine.conf"
+	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/limine.conf" "::/boot/limine/limine.conf"
+	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/limine.conf" "::/boot/limine.conf"
+	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/limine.conf" "::/limine/limine.conf"
 	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/boot/bootloader.sys" "::/boot/bootloader.sys"
 	xorriso -as mkisofs -quiet -J -R -V APPLE_XNU_$(ARCH) -eltorito-alt-boot -e EFI/efiboot.img -no-emul-boot -o "$@" "$(ISO_ROOT)"
 
@@ -78,11 +87,19 @@ verify: $(ISO)
 	grep -q '/BUILD-LABEL.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/XNU-UPSTREAM.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/LIMINE-UPSTREAM.txt' "$(BUILD_DIR)/iso-contents.txt"
-	grep -q '/limine.cfg' "$(BUILD_DIR)/iso-contents.txt"
+	grep -q '/limine.conf' "$(BUILD_DIR)/iso-contents.txt"
+	grep -q '/boot/limine/limine.conf' "$(BUILD_DIR)/iso-contents.txt"
+	grep -q '/boot/limine.conf' "$(BUILD_DIR)/iso-contents.txt"
+	grep -q '/limine/limine.conf' "$(BUILD_DIR)/iso-contents.txt"
+	grep -q '/EFI/BOOT/limine.conf' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/boot/bootloader.sys' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/EFI/BOOT/$(EFI_BOOT_NAME)' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/EFI/efiboot.img' "$(BUILD_DIR)/iso-contents.txt"
-	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/limine.cfg | grep -q '/OS8'
+	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/limine.conf | grep -q '/OS8'
+	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/EFI/BOOT/limine.conf | grep -q '/OS8'
+	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/boot/limine/limine.conf | grep -q '/OS8'
+	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/boot/limine.conf | grep -q '/OS8'
+	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/limine/limine.conf | grep -q '/OS8'
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/BOOT/$(EFI_BOOT_NAME)" >/dev/null
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/boot/bootloader.sys" >/dev/null
 	grep -q '/xnu-kernel/xnu-kernel-artifacts.txt' "$(BUILD_DIR)/iso-contents.txt"
