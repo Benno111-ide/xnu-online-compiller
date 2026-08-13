@@ -32,8 +32,9 @@ dstroot="$out_abs/dst"
 symroot="$out_abs/sym"
 artifact_root="$out_abs/artifacts"
 manifest="$out_abs/xnu-kernel-artifacts.txt"
+build_log="$out_abs/xnu-build.log"
 
-rm -rf "$objroot" "$dstroot" "$symroot" "$artifact_root" "$manifest"
+rm -rf "$objroot" "$dstroot" "$symroot" "$artifact_root" "$manifest" "$build_log"
 mkdir -p "$objroot" "$dstroot" "$symroot" "$artifact_root"
 
 : "${RC_DARWIN_KERNEL_VERSION:=9999.0.0}"
@@ -43,7 +44,9 @@ echo "SRCROOT=$src"
 echo "OBJROOT=$objroot"
 echo "DSTROOT=$dstroot"
 echo "SYMROOT=$symroot"
+echo "LOG=$build_log"
 
+set +e
 make -C "$src" \
     SDKROOT=macosx \
     HOST_SDKROOT=macosx \
@@ -51,7 +54,7 @@ make -C "$src" \
     KERNEL_CONFIGS=RELEASE \
     RC_DARWIN_KERNEL_VERSION="$RC_DARWIN_KERNEL_VERSION" \
     VERBOSE=YES \
-    MAKEJOBS=--jobs=2 \
+    MAKEJOBS=--jobs=1 \
     BUILD_WERROR=0 \
     BUILD_LTO=0 \
     BUILD_DSYM=0 \
@@ -59,7 +62,15 @@ make -C "$src" \
     OBJROOT="$objroot" \
     DSTROOT="$dstroot" \
     SYMROOT="$symroot" \
-    install_kernels
+    install_kernels > "$build_log" 2>&1
+make_status=$?
+set -e
+
+if [ "$make_status" -ne 0 ]; then
+    echo "XNU build failed with exit code $make_status. Last 200 log lines:" >&2
+    tail -n 200 "$build_log" >&2 || true
+    exit "$make_status"
+fi
 
 find "$objroot" "$dstroot" "$symroot" -type f \
     \( -name 'kernel*' -o -name 'mach*' -o -name 'libkernel*.a' -o -name 'compile_commands.json' \) \

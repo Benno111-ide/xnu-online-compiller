@@ -34,6 +34,15 @@ jobs:
       - name: Build Apple XNU kernel and create ISO
         run: make ARCH=${{ matrix.arch }} all
 
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-xnu-kernel-${{ matrix.arch }}-logs
+          path: |
+            build/${{ matrix.arch }}/xnu-build/*.log
+          if-no-files-found: ignore
+
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
         with:
