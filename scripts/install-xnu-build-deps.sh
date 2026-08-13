@@ -2,6 +2,7 @@
 set -eu
 
 dst="${1:?usage: install-xnu-build-deps.sh <deps-dir>}"
+xnu_src="${2:-${XNU_SOURCE_DIR:-build/xnu-source}}"
 
 if [ "$(uname -s)" != "Darwin" ]; then
     echo "Apple XNU build dependencies are only installed on macOS runners." >&2
@@ -243,6 +244,35 @@ __firehose_buffer_tracepoint_flush(firehose_tracepoint_t tracepoint,
     (void)tracepoint;
     (void)tracepoint_id;
 }
+SOURCE
+
+    if [ -f "$xnu_src/config/libTightbeam.exports" ]; then
+        while IFS= read -r symbol; do
+            case "$symbol" in
+                _tb_*)
+                    printf 'uintptr_t %s(void) { return 0; }\n' "${symbol#_}" >> "$dst/firehose_kernel_stub.c"
+                    ;;
+            esac
+        done < "$xnu_src/config/libTightbeam.exports"
+    fi
+
+    cat >> "$dst/firehose_kernel_stub.c" <<'SOURCE'
+
+uintptr_t
+uat_get_desc(void)
+{
+    return 0;
+}
+
+void
+thread_bootstrap_return(void)
+{
+    for (;;) {
+    }
+}
+
+uint64_t vm_first_phys = 0;
+uint64_t vm_last_phys = 0;
 SOURCE
 
     clang -c -arch x86_64 -mmacosx-version-min=15.5 \
