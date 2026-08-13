@@ -17,7 +17,7 @@ fi
 
 kernel=$(
     find "$artifacts" -type f \
-        \( -name 'kernel' -o -name 'kernel.release' -o -name 'mach' -o -name 'mach.release' \) \
+        \( -name 'kernel' -o -name 'kernel.*' -o -name 'mach' -o -name 'mach.*' \) \
         | sort \
         | head -n 1
 )

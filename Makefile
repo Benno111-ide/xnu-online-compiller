@@ -86,7 +86,7 @@ verify: $(ISO)
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/BOOT/$(EFI_BOOT_NAME)" >/dev/null
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/boot/bootloader.sys" >/dev/null
 	grep -q '/xnu-kernel/xnu-kernel-artifacts.txt' "$(BUILD_DIR)/iso-contents.txt"
-	grep -Eq '/xnu-kernel/.*/kernel(\.release)?$$|/xnu-kernel/.*/mach(\.release)?$$' "$(BUILD_DIR)/iso-contents.txt"
+	grep -Eq '/xnu-kernel/.*/kernel(\.[^/]*)?$$|/xnu-kernel/.*/mach(\.[^/]*)?$$' "$(BUILD_DIR)/iso-contents.txt"
 	grep -Ei 'EFI|UEFI' "$(BUILD_DIR)/iso-eltorito.txt"
 
 clean:
