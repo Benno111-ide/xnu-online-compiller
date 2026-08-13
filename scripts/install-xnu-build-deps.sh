@@ -64,6 +64,8 @@ fi
 kernel_private_headers="$sdkroot/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders"
 sudo mkdir -p \
     "$sdkroot/usr/local/include/kernel" \
+    "$sdkroot/usr/local/lib/kernel" \
+    "$sdkroot/usr/local/lib/kernel/platform" \
     "$sdkroot/usr/local/include/CodeSignature" \
     "$sdkroot/usr/local/include/CoreEntitlements/V2" \
     "$sdkroot/usr/local/include/os" \
@@ -181,6 +183,77 @@ void __firehose_buffer_tracepoint_flush(firehose_tracepoint_t tracepoint,
 #endif
 HEADER
     sudo cp "$dst/os-firehose_buffer_private.h" "$sdkroot/usr/local/include/os/firehose_buffer_private.h"
+fi
+
+if [ ! -f "$sdkroot/usr/local/lib/kernel/libfirehose_kernel.a" ]; then
+    cat > "$dst/firehose_kernel_stub.c" <<'SOURCE'
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+typedef uint8_t firehose_stream_t;
+typedef union firehose_buffer_u *firehose_buffer_t;
+typedef struct firehose_tracepoint_s *firehose_tracepoint_t;
+typedef union {
+    uint64_t ftid_value;
+} firehose_tracepoint_id_u;
+typedef struct {
+    uint64_t fpr_mem_flushed_pos;
+    uint64_t fpr_io_flushed_pos;
+} firehose_push_reply_t;
+
+firehose_buffer_t
+__firehose_buffer_create(size_t *size)
+{
+    (void)size;
+    return (firehose_buffer_t)0;
+}
+
+bool
+__firehose_kernel_configuration_valid(uint8_t chunk_count, uint8_t io_pages)
+{
+    return chunk_count != 0 && io_pages != 0;
+}
+
+bool
+__firehose_merge_updates(firehose_push_reply_t update)
+{
+    (void)update;
+    return false;
+}
+
+firehose_tracepoint_t
+__firehose_buffer_tracepoint_reserve(uint64_t stamp, firehose_stream_t stream,
+    uint16_t pubsize, uint16_t privsize, uint8_t **privdata)
+{
+    (void)stamp;
+    (void)stream;
+    (void)pubsize;
+    (void)privsize;
+    if (privdata != NULL) {
+        *privdata = NULL;
+    }
+    return (firehose_tracepoint_t)0;
+}
+
+void
+__firehose_buffer_tracepoint_flush(firehose_tracepoint_t tracepoint,
+    firehose_tracepoint_id_u tracepoint_id)
+{
+    (void)tracepoint;
+    (void)tracepoint_id;
+}
+SOURCE
+
+    clang -c -arch x86_64 -mmacosx-version-min=15.5 \
+        "$dst/firehose_kernel_stub.c" -o "$dst/firehose_kernel_stub.x86_64.o"
+    clang -c -arch arm64e -mmacosx-version-min=15.5 \
+        "$dst/firehose_kernel_stub.c" -o "$dst/firehose_kernel_stub.arm64e.o"
+    libtool -static -o "$dst/libfirehose_kernel.x86_64.a" "$dst/firehose_kernel_stub.x86_64.o"
+    libtool -static -o "$dst/libfirehose_kernel.arm64e.a" "$dst/firehose_kernel_stub.arm64e.o"
+    lipo -create -output "$dst/libfirehose_kernel.a" \
+        "$dst/libfirehose_kernel.x86_64.a" "$dst/libfirehose_kernel.arm64e.a"
+    sudo cp "$dst/libfirehose_kernel.a" "$sdkroot/usr/local/lib/kernel/libfirehose_kernel.a"
 fi
 
 if [ ! -f "$sdkroot/usr/local/include/TrustCache/API.h" ]; then
