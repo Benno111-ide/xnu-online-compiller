@@ -12,11 +12,15 @@ expected XNU source tree, invokes Apple XNU's own Makefile on macOS/Xcode,
 packages the produced kernel artifacts into each ISO, verifies the ISO contents,
 and uploads the ISO as a workflow artifact.
 
-Each ISO includes an EFI El Torito boot image with the standard fallback loader
-path for the target architecture:
+Each ISO includes a Limine EFI El Torito boot image with the standard fallback
+loader path for the target architecture:
 
 - `EFI/BOOT/BOOTX64.EFI` for `amd64`
 - `EFI/BOOT/BOOTAA64.EFI` for `arm64`
+
+Limine is fetched from the pinned official binary release recorded in
+`xnu-upstream.env`. CI verifies the Limine checksum, the ISO fallback EFI path,
+the embedded EFI boot image, `limine.cfg`, and the XNU kernel artifacts.
 
 There is no local placeholder kernel source in this repository. The build fails
 unless Apple XNU's external source tree produces real kernel artifacts.
