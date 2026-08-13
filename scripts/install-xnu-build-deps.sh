@@ -206,7 +206,7 @@ typedef struct TrustCacheRuntime {
     bool allowSecondStaticTC;
     bool allowEngineeringTC;
     bool allowLegacyTC;
-    uint32_t img4Runtime;
+    const void *img4Runtime;
 } TrustCacheRuntime_t;
 
 typedef struct TrustCacheMutableRuntime {
@@ -225,7 +225,7 @@ trustCacheInitializeRuntime(
     bool allowSecondStaticTC,
     bool allowEngineeringTC,
     bool allowLegacyTC,
-    uint32_t img4Runtime)
+    const void *img4Runtime)
 {
     (void)mutableRuntime;
     runtime->allowSecondStaticTC = allowSecondStaticTC;
