@@ -7,6 +7,7 @@ XNU_STAMP := $(BUILD_DIR)/xnu-upstream-stamp.txt
 ISO_ROOT := $(BUILD_DIR)/iso-root
 XNU_BUILD_DIR := $(BUILD_DIR)/xnu-build
 XNU_ARTIFACTS_DIR := $(XNU_BUILD_DIR)/artifacts
+BOOTSTUB := $(BUILD_DIR)/bootloader.sys
 ISO := $(BUILD_DIR)/apple-xnu-kernel-$(ARCH).iso
 EFI_DIR := $(BUILD_DIR)/efi
 EFI_IMAGE_SIZE_KB := 131072
@@ -22,7 +23,7 @@ else
 $(error Unsupported ARCH '$(ARCH)'; use amd64 or arm64)
 endif
 
-.PHONY: all fetch-xnu verify-xnu fetch-limine install-build-deps build-xnu iso verify smoke-boot clean
+.PHONY: all fetch-xnu verify-xnu fetch-limine install-build-deps build-xnu build-bootstub iso verify smoke-boot clean
 
 all: build-xnu iso verify
 
@@ -41,6 +42,9 @@ install-build-deps:
 build-xnu: verify-xnu install-build-deps
 	sh scripts/build-xnu-kernel.sh "$(ARCH)" "$(XNU_SOURCE_DIR)" "$(XNU_BUILD_DIR)"
 
+build-bootstub: fetch-limine
+	sh scripts/build-limine-bootstub.sh "$(ARCH)" "$(BUILD_DIR)/bootstub" "$(BOOTSTUB)"
+
 iso: $(ISO)
 
 $(BUILD_DIR):
@@ -50,7 +54,7 @@ $(XNU_STAMP): xnu-upstream.env | $(BUILD_DIR)
 	. ./xnu-upstream.env; \
 	printf 'repo=%s\nref=%s\ncommit=%s\narch=%s\nxnu_arch=%s\n' "$$XNU_REPO_URL" "$$XNU_REF" "$$XNU_COMMIT" '$(ARCH)' '$(XNU_ARCH)' > $@
 
-$(ISO): build-xnu fetch-limine $(XNU_STAMP)
+$(ISO): build-xnu build-bootstub $(XNU_STAMP)
 	rm -rf "$(ISO_ROOT)"
 	mkdir -p "$(ISO_ROOT)/xnu-kernel" "$(ISO_ROOT)/boot" "$(ISO_ROOT)/EFI/BOOT" "$(BUILD_DIR)/efi"
 	printf 'apple-xnu-kernel-%s\n' '$(ARCH)' > "$(ISO_ROOT)/BUILD-LABEL.txt"
@@ -64,7 +68,7 @@ $(ISO): build-xnu fetch-limine $(XNU_STAMP)
 	cp "$(ISO_ROOT)/limine.conf" "$(ISO_ROOT)/limine/limine.conf"
 	cp "$(ISO_ROOT)/limine.conf" "$(ISO_ROOT)/EFI/BOOT/limine.conf"
 	tar -C "$(XNU_ARTIFACTS_DIR)" -cf - . | tar -C "$(ISO_ROOT)/xnu-kernel" -xf -
-	sh scripts/install-bootloader-sys.sh "$(XNU_ARTIFACTS_DIR)" "$(ISO_ROOT)/boot/bootloader.sys"
+	cp "$(BOOTSTUB)" "$(ISO_ROOT)/boot/bootloader.sys"
 	cp "$(LIMINE_DIR)/$(EFI_BOOT_NAME)" "$(EFI_DIR)/$(EFI_BOOT_NAME)"
 	cp "$(EFI_DIR)/$(EFI_BOOT_NAME)" "$(ISO_ROOT)/EFI/BOOT/$(EFI_BOOT_NAME)"
 	dd if=/dev/zero of="$(ISO_ROOT)/EFI/efiboot.img" bs=1024 count="$(EFI_IMAGE_SIZE_KB)" >/dev/null 2>&1
