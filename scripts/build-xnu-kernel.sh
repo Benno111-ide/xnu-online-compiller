@@ -88,6 +88,15 @@ SOURCE
             printf '/* Public XNU standalone ARM64 RORGN placeholder. */\n' > "$rorgn_missing"
         fi
     done
+
+    arm64_tunables="$src/osfmk/arm64/tunables/tunables.s"
+    if [ ! -f "$arm64_tunables" ]; then
+        mkdir -p "$(dirname "$arm64_tunables")"
+        cat > "$arm64_tunables" <<'SOURCE'
+.macro APPLY_TUNABLES tmp0, tmp1, tmp2
+.endmacro
+SOURCE
+    fi
 fi
 
 : "${RC_DARWIN_KERNEL_VERSION:=9999.0.0}"
