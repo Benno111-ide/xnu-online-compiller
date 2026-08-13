@@ -120,6 +120,24 @@ static void fill_rect(struct limine_framebuffer *fb,
     }
 }
 
+static void flush_framebuffer(const struct limine_framebuffer *fb) {
+#if defined(__aarch64__)
+    uint64_t ctr_el0;
+    __asm__ volatile ("mrs %0, ctr_el0" : "=r"(ctr_el0));
+    uint64_t line_size = 4ull << ((ctr_el0 >> 16) & 0xf);
+    uintptr_t start = (uintptr_t)fb->address;
+    uintptr_t end = start + fb->pitch * fb->height;
+    start &= ~(uintptr_t)(line_size - 1);
+
+    for (uintptr_t p = start; p < end; p += line_size) {
+        __asm__ volatile ("dc cvac, %0" :: "r"(p) : "memory");
+    }
+    __asm__ volatile ("dsb sy; isb" ::: "memory");
+#else
+    (void)fb;
+#endif
+}
+
 __attribute__((noreturn))
 static void halt_forever(void) {
     for (;;) {
@@ -144,6 +162,7 @@ void _start(void) {
         fill_rect(fb, 0, 0, fb->width, fb->height, background);
         fill_rect(fb, fb->width / 8, fb->height / 3, fb->width * 3 / 4, fb->height / 5, marker);
         fill_rect(fb, fb->width / 8, fb->height / 3 + fb->height / 5 + 12, fb->width * 3 / 4, 18, stripe);
+        flush_framebuffer(fb);
     }
 
     halt_forever();
@@ -202,7 +221,7 @@ case "$arch" in
     arm64)
         target=aarch64-unknown-elf
         linker_machine=aarch64elf
-        cflags=""
+        cflags="-mcpu=generic -march=armv8-a+nofp+nosimd -mgeneral-regs-only"
         ;;
     *)
         echo "unsupported architecture: $arch" >&2
@@ -227,6 +246,7 @@ esac
 "$ld_lld" \
     -m "$linker_machine" \
     -no-pie \
+    -z max-page-size=0x1000 \
     -T "$linker" \
     --build-id=none \
     "$object" \
