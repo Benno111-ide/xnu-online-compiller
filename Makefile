@@ -54,7 +54,7 @@ $(XNU_STAMP): xnu-upstream.env | $(BUILD_DIR)
 	. ./xnu-upstream.env; \
 	printf 'repo=%s\nref=%s\ncommit=%s\narch=%s\nxnu_arch=%s\n' "$$XNU_REPO_URL" "$$XNU_REF" "$$XNU_COMMIT" '$(ARCH)' '$(XNU_ARCH)' > $@
 
-$(ISO): build-xnu build-bootstub $(XNU_STAMP)
+$(ISO): build-xnu build-bootstub $(XNU_STAMP) limine.conf
 	rm -rf "$(ISO_ROOT)"
 	mkdir -p "$(ISO_ROOT)/xnu-kernel" "$(ISO_ROOT)/boot" "$(ISO_ROOT)/EFI/BOOT" "$(BUILD_DIR)/efi"
 	printf 'apple-xnu-kernel-%s\n' '$(ARCH)' > "$(ISO_ROOT)/BUILD-LABEL.txt"
@@ -99,11 +99,17 @@ verify: $(ISO)
 	grep -q '/boot/bootloader.sys' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/EFI/BOOT/$(EFI_BOOT_NAME)' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/EFI/efiboot.img' "$(BUILD_DIR)/iso-contents.txt"
+	grep -q 'cmdline: -v' "$(ISO_ROOT)/limine.conf"
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/limine.conf | grep -q '/OS8'
+	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/limine.conf | grep -q 'cmdline: -v'
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/EFI/BOOT/limine.conf | grep -q '/OS8'
+	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/EFI/BOOT/limine.conf | grep -q 'cmdline: -v'
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/boot/limine/limine.conf | grep -q '/OS8'
+	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/boot/limine/limine.conf | grep -q 'cmdline: -v'
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/boot/limine.conf | grep -q '/OS8'
+	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/boot/limine.conf | grep -q 'cmdline: -v'
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/limine/limine.conf | grep -q '/OS8'
+	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/limine/limine.conf | grep -q 'cmdline: -v'
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/BOOT/$(EFI_BOOT_NAME)" >/dev/null
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/boot/bootloader.sys" >/dev/null
 	grep -q '/xnu-kernel/xnu-kernel-artifacts.txt' "$(BUILD_DIR)/iso-contents.txt"
