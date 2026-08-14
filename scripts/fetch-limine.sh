@@ -17,6 +17,10 @@ esac
 
 . ./xnu-upstream.env
 
+if [ -s "$dst/BOOTX64.EFI" ] && [ -s "$dst/BOOTAA64.EFI" ] && [ -s "$dst/LICENSE" ]; then
+    exit 0
+fi
+
 tmp="${dst}.tmp"
 archive="${tmp}/limine-binary.tar.xz"
 

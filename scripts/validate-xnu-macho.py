@@ -7,6 +7,8 @@ MH_MAGIC_64 = 0xFEEDFACF
 MH_CIGAM_64 = 0xCFFAEDFE
 FAT_MAGIC = 0xCAFEBABE
 FAT_CIGAM = 0xBEBAFECA
+FAT_MAGIC_64 = 0xCAFEBABF
+FAT_CIGAM_64 = 0xBFBAFECA
 LC_SEGMENT_64 = 0x19
 LC_UNIXTHREAD = 0x5
 LC_MAIN = 0x80000028
@@ -112,21 +114,28 @@ def main():
         parse_slice(data, arch, 0, len(data))
         return
 
-    if magic not in (FAT_MAGIC, FAT_CIGAM):
+    if magic not in (FAT_MAGIC, FAT_CIGAM, FAT_MAGIC_64, FAT_CIGAM_64):
         raise SystemExit(f"not a Mach-O or FAT Mach-O file: 0x{magic:08x}")
 
-    endian = ">" if magic == FAT_MAGIC else "<"
+    endian = ">" if magic in (FAT_CIGAM, FAT_CIGAM_64) else "<"
+    fat64 = magic in (FAT_MAGIC_64, FAT_CIGAM_64)
     if len(data) < 8:
         raise SystemExit("FAT Mach-O header is truncated")
     nfat = u32(data, 4, endian)
-    table_size = 8 + nfat * 20
+    arch_entry_size = 32 if fat64 else 20
+    table_size = 8 + nfat * arch_entry_size
     if not range_ok(0, len(data), table_size):
         raise SystemExit("FAT Mach-O architecture table is truncated")
 
     wanted = CPU_TYPES[arch]
     for index in range(nfat):
-        entry = 8 + index * 20
-        cputype, _subtype, offset, size, _align = struct.unpack_from(f"{endian}IIIII", data, entry)
+        entry = 8 + index * arch_entry_size
+        if fat64:
+            cputype, _subtype, offset, size, _align, _reserved = struct.unpack_from(
+                f"{endian}IIQQII", data, entry
+            )
+        else:
+            cputype, _subtype, offset, size, _align = struct.unpack_from(f"{endian}IIIII", data, entry)
         if cputype == wanted:
             parse_slice(data, arch, offset, size)
             return

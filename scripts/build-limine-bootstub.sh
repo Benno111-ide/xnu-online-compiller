@@ -330,6 +330,39 @@ static void debug_stage(uint64_t stage, uint8_t r, uint8_t g, uint8_t b) {
 }
 #endif
 
+static void serial_putc(char c) {
+#if defined(__x86_64__)
+    __asm__ volatile ("outb %0, %1" :: "a"((uint8_t)c), "Nd"((uint16_t)0x3f8));
+#else
+    (void)c;
+#endif
+}
+
+static void serial_write(const char *s) {
+    while (*s != '\0') {
+        if (*s == '\n') {
+            serial_putc('\r');
+        }
+        serial_putc(*s++);
+    }
+}
+
+static void serial_hex64(uint64_t value) {
+    static const char hexdigits[] = "0123456789abcdef";
+    serial_write("0x");
+    for (int i = 0; i < 16; i++) {
+        serial_putc(hexdigits[(value >> ((15 - i) * 4)) & 0xf]);
+    }
+}
+
+static void serial_key_hex(const char *key, uint64_t value) {
+    serial_write("os8-handoff: ");
+    serial_write(key);
+    serial_write("=");
+    serial_hex64(value);
+    serial_write("\n");
+}
+
 #if XNU_HANDOFF_JUMP && defined(__aarch64__)
 static void flush_range_to_poc(const void *address, uint64_t size) {
     uint64_t ctr_el0;
@@ -596,6 +629,8 @@ static const uint8_t *module_data(const struct limine_file *file) {
 #define MH_CIGAM_64 0xcffaedfeU
 #define FAT_MAGIC 0xcafebabeU
 #define FAT_CIGAM 0xbebafecaU
+#define FAT_MAGIC_64 0xcafebabfU
+#define FAT_CIGAM_64 0xbfbafecaU
 #define CPU_TYPE_X86_64 0x01000007U
 #define CPU_TYPE_ARM64 0x0100000cU
 #define LC_SEGMENT_64 0x19U
@@ -741,6 +776,20 @@ struct xnu_boot_args_arm64 {
     uint64_t mem_size_actual;
 };
 
+#define STATIC_ASSERT(name, condition) typedef char static_assert_##name[(condition) ? 1 : -1]
+#define OFFSET_OF(type, member) ((uint64_t)__builtin_offsetof(type, member))
+
+STATIC_ASSERT(x86_boot_args_size, sizeof(struct xnu_boot_args_x86) == 4096);
+STATIC_ASSERT(x86_command_line_offset, OFFSET_OF(struct xnu_boot_args_x86, command_line) == 8);
+STATIC_ASSERT(x86_device_tree_offset, OFFSET_OF(struct xnu_boot_args_x86, device_tree_p) == 1072);
+STATIC_ASSERT(x86_physical_memory_size_offset, OFFSET_OF(struct xnu_boot_args_x86, physical_memory_size) == 1144);
+STATIC_ASSERT(arm64_boot_args_size, sizeof(struct xnu_boot_args_arm64) == 1152);
+STATIC_ASSERT(arm64_virt_base_offset, OFFSET_OF(struct xnu_boot_args_arm64, virt_base) == 8);
+STATIC_ASSERT(arm64_device_tree_offset, OFFSET_OF(struct xnu_boot_args_arm64, device_tree_p) == 96);
+STATIC_ASSERT(arm64_device_tree_length_offset, OFFSET_OF(struct xnu_boot_args_arm64, device_tree_length) == 104);
+STATIC_ASSERT(arm64_boot_flags_offset, OFFSET_OF(struct xnu_boot_args_arm64, boot_flags) == 1136);
+STATIC_ASSERT(arm64_mem_size_actual_offset, OFFSET_OF(struct xnu_boot_args_arm64, mem_size_actual) == 1144);
+
 struct xnu_handoff {
     void *boot_args;
     uint64_t boot_args_phys;
@@ -824,11 +873,25 @@ struct fat_arch {
     uint32_t align;
 };
 
+struct fat_arch_64 {
+    uint32_t cputype;
+    uint32_t cpusubtype;
+    uint64_t offset;
+    uint64_t size;
+    uint32_t align;
+    uint32_t reserved;
+};
+
 static uint32_t bswap32(uint32_t value) {
     return ((value & 0x000000ffU) << 24)
          | ((value & 0x0000ff00U) << 8)
          | ((value & 0x00ff0000U) >> 8)
          | ((value & 0xff000000U) >> 24);
+}
+
+static uint64_t bswap64(uint64_t value) {
+    return ((uint64_t)bswap32((uint32_t)value) << 32)
+         | (uint64_t)bswap32((uint32_t)(value >> 32));
 }
 
 #if defined(__aarch64__)
@@ -969,24 +1032,38 @@ static int parse_macho(struct limine_file *file, struct macho_preflight *out) {
     if (magic == MH_MAGIC_64 || magic == MH_CIGAM_64) {
         return parse_macho_slice(out, image, file->size, 0, file->size);
     }
-    if (magic != FAT_MAGIC && magic != FAT_CIGAM) {
+    if (magic != FAT_MAGIC && magic != FAT_CIGAM && magic != FAT_MAGIC_64 && magic != FAT_CIGAM_64) {
         out->status = 11;
         return 0;
     }
 
     const struct fat_header *fat = (const struct fat_header *)image;
-    uint32_t nfat_arch = magic == FAT_MAGIC ? bswap32(fat->nfat_arch) : fat->nfat_arch;
-    uint64_t arch_table_size = sizeof(*fat) + (uint64_t)nfat_arch * sizeof(struct fat_arch);
+    int fat_big_endian = magic == FAT_CIGAM || magic == FAT_CIGAM_64;
+    int fat64 = magic == FAT_MAGIC_64 || magic == FAT_CIGAM_64;
+    uint32_t nfat_arch = fat_big_endian ? bswap32(fat->nfat_arch) : fat->nfat_arch;
+    uint64_t arch_entry_size = fat64 ? sizeof(struct fat_arch_64) : sizeof(struct fat_arch);
+    uint64_t arch_table_size = sizeof(*fat) + (uint64_t)nfat_arch * arch_entry_size;
     if (!range_ok(0, file->size, arch_table_size)) {
         out->status = 12;
         return 0;
     }
 
-    const struct fat_arch *arches = (const struct fat_arch *)(image + sizeof(*fat));
     for (uint32_t i = 0; i < nfat_arch; i++) {
-        uint32_t cputype = magic == FAT_MAGIC ? bswap32(arches[i].cputype) : arches[i].cputype;
-        uint32_t offset = magic == FAT_MAGIC ? bswap32(arches[i].offset) : arches[i].offset;
-        uint32_t size = magic == FAT_MAGIC ? bswap32(arches[i].size) : arches[i].size;
+        uint64_t entry = sizeof(*fat) + (uint64_t)i * arch_entry_size;
+        uint32_t cputype = 0;
+        uint64_t offset = 0;
+        uint64_t size = 0;
+        if (fat64) {
+            const struct fat_arch_64 *arch = (const struct fat_arch_64 *)(image + entry);
+            cputype = fat_big_endian ? bswap32(arch->cputype) : arch->cputype;
+            offset = fat_big_endian ? bswap64(arch->offset) : arch->offset;
+            size = fat_big_endian ? bswap64(arch->size) : arch->size;
+        } else {
+            const struct fat_arch *arch = (const struct fat_arch *)(image + entry);
+            cputype = fat_big_endian ? bswap32(arch->cputype) : arch->cputype;
+            offset = fat_big_endian ? bswap32(arch->offset) : arch->offset;
+            size = fat_big_endian ? bswap32(arch->size) : arch->size;
+        }
         if (cputype == XNU_CPU_TYPE) {
             return parse_macho_slice(out, image, file->size, offset, size);
         }
@@ -1086,18 +1163,33 @@ static uint64_t physical_memory_size_from_memmap(void) {
         return 0;
     }
 
-    uint64_t highest = 0;
+    uint64_t total = 0;
+    uint64_t fallback_total = 0;
     for (uint64_t i = 0; i < memmap->entry_count; i++) {
         struct limine_memmap_entry *entry = memmap->entries[i];
-        if (entry == 0 || entry->type == LIMINE_MEMMAP_BAD_MEMORY) {
+        if (entry == 0) {
             continue;
         }
-        uint64_t end = entry->base + entry->length;
-        if (end > highest) {
-            highest = end;
+        if (entry->type == LIMINE_MEMMAP_USABLE ||
+            entry->type == LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE ||
+            entry->type == LIMINE_MEMMAP_KERNEL_AND_MODULES) {
+            if (entry->base < 0x100000000ULL) {
+                uint64_t length = entry->length;
+                if (entry->base + length > 0x100000000ULL) {
+                    length = 0x100000000ULL - entry->base;
+                }
+                total += length;
+            }
+        }
+        if (entry->type != LIMINE_MEMMAP_BAD_MEMORY && entry->base < 0x100000000ULL) {
+            uint64_t length = entry->length;
+            if (entry->base + length > 0x100000000ULL) {
+                length = 0x100000000ULL - entry->base;
+            }
+            fallback_total += length;
         }
     }
-    return highest;
+    return total != 0 ? total : fallback_total;
 }
 
 static void write_dt_prop_name(char dst[32], const char *name) {
@@ -1132,7 +1224,8 @@ static uint8_t *dt_write_string_prop(uint8_t *p, const char *name, const char *v
 static int build_minimal_device_tree(struct boot_allocator *allocator,
                                      void **dt_virt,
                                      uint64_t *dt_phys,
-                                     uint32_t *dt_size) {
+                                     uint32_t *dt_size,
+                                     uint64_t physical_memory_size) {
     uint64_t phys = 0;
     uint8_t *dt = (uint8_t *)boot_alloc(allocator, 4096, 16, &phys);
     if (dt == 0) {
@@ -1143,7 +1236,7 @@ static int build_minimal_device_tree(struct boot_allocator *allocator,
     uint8_t *p = dt;
     struct apple_dt_node *root = (struct apple_dt_node *)p;
     root->n_properties = 4;
-    root->n_children = 2;
+    root->n_children = 3;
     p += sizeof(*root);
     p = dt_write_string_prop(p, "name", "device-tree");
     p = dt_write_string_prop(p, "compatible", "openai,os8-limine");
@@ -1159,36 +1252,49 @@ static int build_minimal_device_tree(struct boot_allocator *allocator,
     p = dt_write_prop(p, "#address-cells", &address_cells, sizeof(address_cells));
 
     struct apple_dt_node *cpu0 = (struct apple_dt_node *)p;
-    cpu0->n_properties = 5;
+    cpu0->n_properties = 6;
     cpu0->n_children = 0;
     p += sizeof(*cpu0);
     p = dt_write_string_prop(p, "name", "cpu0");
     p = dt_write_string_prop(p, "device_type", "cpu");
     p = dt_write_string_prop(p, "state", "running");
+    uint32_t cpu_reg = 0;
     uint32_t timebase = 24000000;
     uint32_t bus_frequency = 100000000;
+    p = dt_write_prop(p, "reg", &cpu_reg, sizeof(cpu_reg));
     p = dt_write_prop(p, "timebase-frequency", &timebase, sizeof(timebase));
     p = dt_write_prop(p, "bus-frequency", &bus_frequency, sizeof(bus_frequency));
 
     struct apple_dt_node *chosen = (struct apple_dt_node *)p;
-    chosen->n_properties = 6;
+    chosen->n_properties = 8;
     chosen->n_children = 1;
     p += sizeof(*chosen);
     p = dt_write_string_prop(p, "name", "chosen");
     uint32_t debug_enabled = 1;
     uint32_t dram_vendor_id = 0;
+    uint64_t dram_base = 0;
     uint64_t unique_chip_id = 0;
     p = dt_write_prop(p, "debug-enabled", &debug_enabled, sizeof(debug_enabled));
     p = dt_write_string_prop(p, "firmware-version", "limine-os8");
     p = dt_write_string_prop(p, "system-firmware-version", "limine-os8");
     p = dt_write_prop(p, "unique-chip-id", &unique_chip_id, sizeof(unique_chip_id));
     p = dt_write_prop(p, "dram-vendor-id", &dram_vendor_id, sizeof(dram_vendor_id));
+    p = dt_write_prop(p, "dram-base", &dram_base, sizeof(dram_base));
+    p = dt_write_prop(p, "dram-size", &physical_memory_size, sizeof(physical_memory_size));
 
     struct apple_dt_node *chosen_memory_map = (struct apple_dt_node *)p;
     chosen_memory_map->n_properties = 1;
     chosen_memory_map->n_children = 0;
     p += sizeof(*chosen_memory_map);
     p = dt_write_string_prop(p, "name", "memory-map");
+
+    struct apple_dt_node *product = (struct apple_dt_node *)p;
+    product->n_properties = 2;
+    product->n_children = 0;
+    p += sizeof(*product);
+    p = dt_write_string_prop(p, "name", "product");
+    uint32_t chip_role = 0;
+    p = dt_write_prop(p, "chip-role", &chip_role, sizeof(chip_role));
 
     *dt_virt = dt;
     *dt_phys = phys;
@@ -1266,7 +1372,8 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
     void *device_tree = 0;
     uint64_t device_tree_phys = 0;
     uint32_t device_tree_size = 0;
-    if (!build_minimal_device_tree(&allocator, &device_tree, &device_tree_phys, &device_tree_size)) {
+    if (!build_minimal_device_tree(&allocator, &device_tree, &device_tree_phys, &device_tree_size,
+                                   handoff->physical_memory_size)) {
         handoff->status = 7;
         return 0;
     }
@@ -1387,17 +1494,24 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
 #if XNU_HANDOFF_JUMP && defined(__aarch64__)
     if (handoff->status != 0 || handoff->kernel_entry_phys == 0 ||
         handoff->boot_args == 0 || handoff->identity_pagetable_phys == 0) {
+        serial_write("os8-handoff: jump skipped\n");
         return 0;
     }
 
     struct limine_hhdm_response *hhdm = hhdm_request.response;
     if (hhdm == 0) {
+        serial_write("os8-handoff: jump skipped no-hhdm\n");
         return 0;
     }
 
     void *entry = (void *)(uintptr_t)(hhdm->offset + handoff->kernel_entry_phys);
     uint64_t boot_args_phys = handoff->boot_args_phys;
     uint64_t identity_ttbr0 = handoff->identity_pagetable_phys;
+    serial_key_hex("jump-entry-phys", handoff->kernel_entry_phys);
+    serial_key_hex("jump-entry-virt", (uint64_t)(uintptr_t)entry);
+    serial_key_hex("jump-boot-args", boot_args_phys);
+    serial_key_hex("jump-ttbr0", identity_ttbr0);
+    serial_write("os8-handoff: jumping\n");
     flush_range_to_poc((void *)(uintptr_t)(hhdm->offset + handoff->kernel_phys), handoff->kernel_size);
     flush_range_to_poc(handoff->boot_args, 0x1000);
     flush_range_to_poc((void *)(uintptr_t)(hhdm->offset + handoff->identity_pagetable_phys), 0x2000);
@@ -1440,10 +1554,13 @@ static void halt_forever(void) {
 }
 
 void _start(void) {
+    serial_write("os8-handoff: start\n");
     struct limine_framebuffer_response *response = framebuffer_request.response;
     if (response != 0 && response->framebuffer_count > 0) {
         struct limine_framebuffer *fb = response->framebuffers[0];
         debug_fb = fb;
+        serial_key_hex("framebuffer-width", fb->width);
+        serial_key_hex("framebuffer-height", fb->height);
         uint32_t early_background = make_pixel(fb, 4, 16, 28);
         uint32_t early_marker = make_pixel(fb, 0, 210, 255);
         fill_rect(fb, 0, 0, fb->width, fb->height, early_background);
@@ -1452,14 +1569,35 @@ void _start(void) {
 
         debug_stage(0, 255, 0, 255);
         struct limine_file *xnu = find_xnu_module();
+        serial_write(xnu != 0 ? "os8-handoff: module found\n" : "os8-handoff: module missing\n");
+        if (xnu != 0) {
+            serial_key_hex("module-size", xnu->size);
+        }
         debug_stage(1, xnu != 0 ? 0 : 255, xnu != 0 ? 255 : 80, 255);
         debug_stage(2, 255, 0, 255);
         struct macho_preflight macho = {0};
         debug_stage(3, 255, 0, 255);
         int macho_ok = xnu != 0 && parse_macho(xnu, &macho);
+        serial_key_hex("macho-status", macho.status);
+        serial_key_hex("macho-slice-offset", macho.slice_offset);
+        serial_key_hex("macho-slice-size", macho.slice_size);
+        serial_key_hex("macho-entry", macho.entry);
+        serial_key_hex("macho-vm-min", macho.vm_min == UINT64_MAX ? 0 : macho.vm_min);
+        serial_key_hex("macho-vm-max", macho.vm_max);
         debug_stage(4, macho_ok ? 0 : 255, macho_ok ? 255 : 80, 255);
         struct xnu_handoff handoff = {0};
         int handoff_ok = build_xnu_handoff(&handoff, xnu, &macho, fb);
+        serial_key_hex("handoff-status", handoff.status);
+        serial_key_hex("kernel-load", handoff.kernel_phys);
+        serial_key_hex("kernel-size", handoff.kernel_size);
+        serial_key_hex("kernel-entry-phys", handoff.kernel_entry_phys);
+        serial_key_hex("boot-args", handoff.boot_args_phys);
+        serial_key_hex("memory-map", handoff.memory_map_phys);
+        serial_key_hex("physical-memory-size", handoff.physical_memory_size);
+#if defined(__aarch64__)
+        serial_key_hex("top-kernel-data", handoff.top_of_kernel_data);
+        serial_key_hex("identity-pagetable", handoff.identity_pagetable_phys);
+#endif
         if (handoff_ok) {
             (void)try_jump_xnu(&handoff);
         }

@@ -23,7 +23,7 @@ LIMINE_DIR := build/limine
 ifeq ($(ARCH),amd64)
 XNU_ARCH := X86_64
 EFI_BOOT_NAME := BOOTX64.EFI
-QEMU_BOOT_WAIT ?= 8
+QEMU_BOOT_WAIT ?= 18
 else ifeq ($(ARCH),arm64)
 XNU_ARCH := ARM64
 EFI_BOOT_NAME := BOOTAA64.EFI
@@ -93,9 +93,14 @@ $(ISO): $(ISO_PREREQS)
 		printf '%s\n' "external/$$xnu_kernel_name" > "$(ISO_ROOT)/xnu-kernel/xnu-kernel-artifacts.txt"; \
 	else \
 		tar -C "$(XNU_ARTIFACTS_DIR)" -cf - . | tar -C "$(ISO_ROOT)/xnu-kernel" -xf -; \
-		xnu_kernel_artifact=$$(find "$(XNU_ARTIFACTS_DIR)" -type f \( -name 'kernel*' -o -name 'mach*' \) | sort | head -n 1); \
+		xnu_kernel_artifact=; \
+		xnu_validation=; \
+		for candidate in $$(find "$(XNU_ARTIFACTS_DIR)" -type f \( -name 'kernel*' -o -name 'mach*' \) | sort); do \
+			xnu_validation=$$(python3 scripts/validate-xnu-macho.py "$(ARCH)" "$$candidate" 2>/dev/null) || continue; \
+			xnu_kernel_artifact="$$candidate"; \
+			break; \
+		done; \
 		test -n "$$xnu_kernel_artifact"; \
-		xnu_validation=$$(python3 scripts/validate-xnu-macho.py "$(ARCH)" "$$xnu_kernel_artifact") || exit 1; \
 		printf '%s\n' "$$xnu_validation" | tee "$(ISO_ROOT)/xnu-kernel/xnu-kernel-validation.txt"; \
 	fi; \
 	cp "$$xnu_kernel_artifact" "$(ISO_ROOT)/boot/xnu-kernel.macho"

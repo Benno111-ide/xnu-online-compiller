@@ -1,11 +1,21 @@
 name: Build Apple XNU kernel ISOs
 
-on:
+"on":
   push:
     branches:
       - main
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_handoff_capture:
+        description: Run the optional arm64 handoff smoke capture with an external XNU Mach-O artifact
+        required: false
+        default: false
+        type: boolean
+      xnu_kernel_artifact_url:
+        description: Optional URL for an external arm64 XNU Mach-O used by the handoff capture step
+        required: false
+        type: string
 
 jobs:
   build:
@@ -36,6 +46,18 @@ jobs:
 
       - name: Smoke boot Limine under UEFI
         run: make ARCH=${{ matrix.arch }} smoke-boot
+
+      - name: Download external arm64 XNU artifact for handoff capture
+        if: matrix.arch == 'arm64' && github.event_name == 'workflow_dispatch' && inputs.run_handoff_capture && inputs.xnu_kernel_artifact_url != ''
+        run: |
+          mkdir -p /tmp/xnu-kernel
+          curl -L --fail --retry 3 "${{ inputs.xnu_kernel_artifact_url }}" -o /tmp/xnu-kernel/kernel.development
+          file /tmp/xnu-kernel/kernel.development
+
+      - name: Capture arm64 XNU handoff boot
+        if: matrix.arch == 'arm64' && github.event_name == 'workflow_dispatch' && inputs.run_handoff_capture && inputs.xnu_kernel_artifact_url != ''
+        run: |
+          make ARCH=arm64 XNU_KERNEL_ARTIFACT=/tmp/xnu-kernel/kernel.development handoff-boot
 
       - name: Upload smoke boot artifacts
         if: always()
