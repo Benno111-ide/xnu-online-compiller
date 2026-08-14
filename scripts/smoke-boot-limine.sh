@@ -16,7 +16,7 @@ if [ ! -s "$boot_image" ]; then
 fi
 
 mkdir -p "$out"
-monitor="$out/qemu-monitor.sock"
+monitor="/tmp/os8-qemu-monitor-$$.sock"
 screenshot="$out/limine-smoke.ppm"
 boot_screenshot="$out/limine-booted.ppm"
 report="$out/limine-smoke.txt"
@@ -43,18 +43,35 @@ find_qemu_file() {
     return 1
 }
 
+find_first_file() {
+    for candidate in "$@"; do
+        if [ -s "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
 case "$arch" in
     amd64)
         qemu=qemu-system-x86_64
-        firmware=$(find_qemu_file edk2-x86_64-code.fd)
-        vars_template=$(find_qemu_file edk2-i386-vars.fd || true)
+        firmware=$(find_qemu_file edk2-x86_64-code.fd || find_first_file \
+            /usr/share/OVMF/OVMF_CODE_4M.fd \
+            /usr/share/ovmf/OVMF.fd)
+        vars_template=$(find_qemu_file edk2-i386-vars.fd || find_first_file \
+            /usr/share/OVMF/OVMF_VARS_4M.fd \
+            /usr/share/OVMF/OVMF_VARS.fd || true)
         machine_args="-machine q35 -device VGA"
         boot_args="-drive if=none,id=bootdisk,file=$boot_image,format=raw,readonly=on -device virtio-blk-pci,drive=bootdisk,bootindex=1"
         ;;
     arm64)
         qemu=qemu-system-aarch64
-        firmware=$(find_qemu_file edk2-aarch64-code.fd)
-        vars_template=$(find_qemu_file edk2-arm-vars.fd || find_qemu_file edk2-aarch64-vars.fd || true)
+        firmware=$(find_qemu_file edk2-aarch64-code.fd || find_first_file \
+            /usr/share/AAVMF/AAVMF_CODE.no-secboot.fd \
+            /usr/share/qemu-efi-aarch64/QEMU_EFI.fd)
+        vars_template=$(find_qemu_file edk2-arm-vars.fd || find_qemu_file edk2-aarch64-vars.fd || find_first_file \
+            /usr/share/AAVMF/AAVMF_VARS.fd || true)
         machine_args="-machine virt -cpu cortex-a57 -device ramfb"
         boot_args="-drive if=none,id=bootdisk,file=$boot_image,format=raw,readonly=on -device virtio-blk-device,drive=bootdisk,bootindex=1"
         ;;
@@ -65,6 +82,11 @@ case "$arch" in
 esac
 
 command -v "$qemu" >/dev/null 2>&1
+
+if [ -z "$firmware" ] || [ ! -s "$firmware" ]; then
+    echo "missing QEMU UEFI firmware for $arch" >&2
+    exit 1
+fi
 
 if [ -n "$vars_template" ] && [ -s "$vars_template" ]; then
     cp "$vars_template" "$vars"
@@ -94,6 +116,7 @@ cleanup() {
         kill "$qemu_pid" 2>/dev/null || true
         wait "$qemu_pid" 2>/dev/null || true
     fi
+    rm -f "$monitor"
 }
 trap cleanup EXIT INT TERM
 
@@ -108,7 +131,7 @@ if [ ! -S "$monitor" ]; then
     exit 1
 fi
 
-sleep 8
+sleep "${QEMU_MENU_WAIT:-8}"
 
 python3 - "$monitor" "$screenshot" "$boot_screenshot" <<'PY'
 import socket
@@ -188,12 +211,18 @@ for i in range(0, len(menu_pixels) - 2, 3):
     if r >= 180 and g <= 90 and b >= 180:
         menu_magenta += 1
 
-boot_green = 0
+boot_handoff_green = 0
+boot_handoff_panel = 0
+boot_handoff_success = 0
 boot_magenta = 0
 for i in range(0, len(boot_pixels) - 2, 3):
     r, g, b = boot_pixels[i], boot_pixels[i + 1], boot_pixels[i + 2]
     if r <= 80 and g >= 160 and b <= 140:
-        boot_green += 1
+        boot_handoff_green += 1
+    if r <= 40 and 25 <= g <= 80 and 35 <= b <= 95:
+        boot_handoff_panel += 1
+    if r <= 60 and g >= 170 and b >= 190:
+        boot_handoff_success += 1
     if r >= 180 and g <= 90 and b >= 180:
         boot_magenta += 1
 
@@ -202,7 +231,9 @@ report.write_text(
     f"menu_bright_pixels={menu_bright}\n"
     f"menu_magenta_branding_pixels={menu_magenta}\n"
     f"boot_width={boot_width}\nboot_height={boot_height}\n"
-    f"boot_green_marker_pixels={boot_green}\n"
+    f"boot_handoff_green_pixels={boot_handoff_green}\n"
+    f"boot_handoff_panel_pixels={boot_handoff_panel}\n"
+    f"boot_handoff_success_pixels={boot_handoff_success}\n"
     f"boot_magenta_marker_pixels={boot_magenta}\n",
     encoding="ascii",
 )
@@ -210,6 +241,8 @@ print(report.read_text(encoding="ascii"), end="")
 
 if menu_magenta < 20:
     raise SystemExit("Limine branding colour was not visible; Limine menu likely did not load")
-if boot_green < 1000:
-    raise SystemExit("Limine did not load the boot stub marker after selecting the menu entry")
+if boot_handoff_green < 1000 or boot_handoff_panel < 1000:
+    raise SystemExit("Limine did not load the XNU handoff preflight screen after selecting the menu entry")
+if boot_handoff_success < 1000:
+    raise SystemExit("XNU handoff preflight did not report successful module staging and boot-args construction")
 PY
