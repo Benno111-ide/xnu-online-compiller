@@ -27,7 +27,10 @@ loads the `bootloader.sys` ELF handoff stub.
 There is no local placeholder kernel source in this repository. The build fails
 unless Apple XNU's external source tree produces real kernel artifacts. The
 boot entry itself is a small Limine-compatible ELF stub because Limine's native
-protocol loader does not load Apple's raw Mach-O kernel artifact directly.
+protocol loader does not load Apple's raw Mach-O kernel artifact directly. When
+booted, that stub stops at a diagnostic screen after confirming Limine handoff.
+It does not yet perform the Mach-O loading and XNU boot-argument setup required
+to start the Apple kernel.
 
 Run the same build on an Ubuntu machine with:
 

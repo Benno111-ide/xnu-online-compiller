@@ -138,6 +138,94 @@ static void flush_framebuffer(const struct limine_framebuffer *fb) {
 #endif
 }
 
+static uint8_t glyph5x7(char c, uint8_t row) {
+    static const uint8_t digits[10][7] = {
+        {0x0e,0x11,0x13,0x15,0x19,0x11,0x0e},
+        {0x04,0x0c,0x04,0x04,0x04,0x04,0x0e},
+        {0x0e,0x11,0x01,0x02,0x04,0x08,0x1f},
+        {0x1e,0x01,0x01,0x0e,0x01,0x01,0x1e},
+        {0x02,0x06,0x0a,0x12,0x1f,0x02,0x02},
+        {0x1f,0x10,0x10,0x1e,0x01,0x01,0x1e},
+        {0x0e,0x10,0x10,0x1e,0x11,0x11,0x0e},
+        {0x1f,0x01,0x02,0x04,0x08,0x08,0x08},
+        {0x0e,0x11,0x11,0x0e,0x11,0x11,0x0e},
+        {0x0e,0x11,0x11,0x0f,0x01,0x01,0x0e},
+    };
+    static const uint8_t letters[26][7] = {
+        {0x0e,0x11,0x11,0x1f,0x11,0x11,0x11},
+        {0x1e,0x11,0x11,0x1e,0x11,0x11,0x1e},
+        {0x0e,0x11,0x10,0x10,0x10,0x11,0x0e},
+        {0x1e,0x11,0x11,0x11,0x11,0x11,0x1e},
+        {0x1f,0x10,0x10,0x1e,0x10,0x10,0x1f},
+        {0x1f,0x10,0x10,0x1e,0x10,0x10,0x10},
+        {0x0e,0x11,0x10,0x17,0x11,0x11,0x0f},
+        {0x11,0x11,0x11,0x1f,0x11,0x11,0x11},
+        {0x0e,0x04,0x04,0x04,0x04,0x04,0x0e},
+        {0x07,0x02,0x02,0x02,0x12,0x12,0x0c},
+        {0x11,0x12,0x14,0x18,0x14,0x12,0x11},
+        {0x10,0x10,0x10,0x10,0x10,0x10,0x1f},
+        {0x11,0x1b,0x15,0x15,0x11,0x11,0x11},
+        {0x11,0x19,0x15,0x13,0x11,0x11,0x11},
+        {0x0e,0x11,0x11,0x11,0x11,0x11,0x0e},
+        {0x1e,0x11,0x11,0x1e,0x10,0x10,0x10},
+        {0x0e,0x11,0x11,0x11,0x15,0x12,0x0d},
+        {0x1e,0x11,0x11,0x1e,0x14,0x12,0x11},
+        {0x0f,0x10,0x10,0x0e,0x01,0x01,0x1e},
+        {0x1f,0x04,0x04,0x04,0x04,0x04,0x04},
+        {0x11,0x11,0x11,0x11,0x11,0x11,0x0e},
+        {0x11,0x11,0x11,0x11,0x11,0x0a,0x04},
+        {0x11,0x11,0x11,0x15,0x15,0x15,0x0a},
+        {0x11,0x11,0x0a,0x04,0x0a,0x11,0x11},
+        {0x11,0x11,0x0a,0x04,0x04,0x04,0x04},
+        {0x1f,0x01,0x02,0x04,0x08,0x10,0x1f},
+    };
+
+    if (row >= 7) {
+        return 0;
+    }
+    if (c >= 'a' && c <= 'z') {
+        c = (char)(c - 'a' + 'A');
+    }
+    if (c >= '0' && c <= '9') {
+        return digits[c - '0'][row];
+    }
+    if (c >= 'A' && c <= 'Z') {
+        return letters[c - 'A'][row];
+    }
+    switch (c) {
+        case '.': return row == 6 ? 0x04 : 0x00;
+        case ':': return row == 1 || row == 5 ? 0x04 : 0x00;
+        case '-': return row == 3 ? 0x1f : 0x00;
+        case '/': return (uint8_t)(0x01 << (6 - row > 4 ? 4 : 6 - row));
+        default: return 0x00;
+    }
+}
+
+static void draw_char(struct limine_framebuffer *fb,
+                      uint64_t x, uint64_t y,
+                      char c, uint64_t scale,
+                      uint32_t colour) {
+    for (uint8_t row = 0; row < 7; row++) {
+        uint8_t bits = glyph5x7(c, row);
+        for (uint8_t col = 0; col < 5; col++) {
+            if ((bits & (uint8_t)(1u << (4 - col))) != 0) {
+                fill_rect(fb, x + col * scale, y + row * scale, scale, scale, colour);
+            }
+        }
+    }
+}
+
+static void draw_text(struct limine_framebuffer *fb,
+                      uint64_t x, uint64_t y,
+                      const char *text, uint64_t scale,
+                      uint32_t colour) {
+    while (*text != '\0') {
+        draw_char(fb, x, y, *text, scale, colour);
+        x += 6 * scale;
+        text++;
+    }
+}
+
 __attribute__((noreturn))
 static void halt_forever(void) {
     for (;;) {
@@ -155,13 +243,23 @@ void _start(void) {
     struct limine_framebuffer_response *response = framebuffer_request.response;
     if (response != 0 && response->framebuffer_count > 0) {
         struct limine_framebuffer *fb = response->framebuffers[0];
-        uint32_t background = make_pixel(fb, 0, 64, 32);
+        uint32_t background = make_pixel(fb, 8, 18, 28);
+        uint32_t panel = make_pixel(fb, 14, 38, 48);
         uint32_t marker = make_pixel(fb, 0, 255, 96);
         uint32_t stripe = make_pixel(fb, 255, 0, 255);
+        uint32_t text = make_pixel(fb, 230, 246, 238);
+        uint32_t muted = make_pixel(fb, 156, 184, 176);
 
         fill_rect(fb, 0, 0, fb->width, fb->height, background);
-        fill_rect(fb, fb->width / 8, fb->height / 3, fb->width * 3 / 4, fb->height / 5, marker);
-        fill_rect(fb, fb->width / 8, fb->height / 3 + fb->height / 5 + 12, fb->width * 3 / 4, 18, stripe);
+        fill_rect(fb, fb->width / 10, fb->height / 5, fb->width * 4 / 5, fb->height * 3 / 5, panel);
+        fill_rect(fb, fb->width / 10, fb->height / 5, fb->width * 4 / 5, 14, marker);
+        fill_rect(fb, fb->width / 10, fb->height / 5 + 22, fb->width * 4 / 5, 6, stripe);
+
+        draw_text(fb, fb->width / 10 + 32, fb->height / 5 + 56, "OS8 BOOT STUB", 4, text);
+        draw_text(fb, fb->width / 10 + 32, fb->height / 5 + 118, "LIMINE HANDOFF OK", 3, marker);
+        draw_text(fb, fb->width / 10 + 32, fb->height / 5 + 164, "XNU MACH-O STARTUP IS NOT IMPLEMENTED", 2, text);
+        draw_text(fb, fb->width / 10 + 32, fb->height / 5 + 200, "THIS IMAGE CANNOT BOOT XNU YET", 2, muted);
+        draw_text(fb, fb->width / 10 + 32, fb->height / 5 + 236, "BOOT STOPPED INTENTIONALLY", 2, muted);
         flush_framebuffer(fb);
     }
 
