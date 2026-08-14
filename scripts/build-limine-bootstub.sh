@@ -330,6 +330,24 @@ static void debug_stage(uint64_t stage, uint8_t r, uint8_t g, uint8_t b) {
 }
 #endif
 
+static char boot_log_buffer[8192];
+static uint64_t boot_log_len;
+
+static void boot_log_append(const char *s) {
+    while (*s != '\0' && boot_log_len + 1 < sizeof(boot_log_buffer)) {
+        boot_log_buffer[boot_log_len++] = *s;
+        s++;
+    }
+    boot_log_buffer[boot_log_len] = '\0';
+}
+
+static void boot_log_append_char(char c) {
+    if (boot_log_len + 1 < sizeof(boot_log_buffer)) {
+        boot_log_buffer[boot_log_len++] = c;
+        boot_log_buffer[boot_log_len] = '\0';
+    }
+}
+
 static void serial_putc(char c) {
 #if defined(__x86_64__)
     __asm__ volatile ("outb %0, %1" :: "a"((uint8_t)c), "Nd"((uint16_t)0x3f8));
@@ -342,8 +360,11 @@ static void serial_write(const char *s) {
     while (*s != '\0') {
         if (*s == '\n') {
             serial_putc('\r');
+            boot_log_append_char('\n');
         }
-        serial_putc(*s++);
+        serial_putc(*s);
+        boot_log_append_char(*s);
+        s++;
     }
 }
 
@@ -465,6 +486,37 @@ static void draw_text(struct limine_framebuffer *fb,
         draw_char(fb, x, y, *text, scale, colour);
         x += 6 * scale;
         text++;
+    }
+}
+
+static void draw_boot_log(struct limine_framebuffer *fb,
+                         uint64_t x, uint64_t y,
+                         uint32_t colour) {
+    if (boot_log_len == 0) {
+        return;
+    }
+
+    char line[96];
+    uint64_t line_y = y;
+    const char *cursor = boot_log_buffer;
+    uint64_t line_index = 0;
+
+    while (*cursor != '\0' && line_index < 10) {
+        uint64_t i = 0;
+        while (*cursor != '\0' && *cursor != '\n' && i + 1 < sizeof(line)) {
+            line[i++] = *cursor++;
+        }
+        line[i] = '\0';
+        if (i == 0 && *cursor == '\n') {
+            cursor++;
+            continue;
+        }
+        draw_text(fb, x, line_y, line, 2, colour);
+        line_y += 20;
+        line_index++;
+        if (*cursor == '\n') {
+            cursor++;
+        }
     }
 }
 
@@ -1408,18 +1460,23 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
         args->efi_system_table = (uint32_t)virt_to_phys(efi_system_table_request.response->address);
     }
     if (fb != 0) {
-        uint64_t fb_phys = virt_to_phys(fb->address);
+        uint64_t fb_phys = 0;
+        uint64_t fb_pitch = 0;
+        uint64_t fb_width = 0;
+        uint64_t fb_height = 0;
+        uint32_t fb_bpp = 0;
+        configure_framebuffer_handoff(fb, &fb_phys, &fb_pitch, &fb_width, &fb_height, &fb_bpp);
         args->video_v1.base_addr = (uint32_t)fb_phys;
         args->video_v1.display = XNU_GRAPHICS_MODE;
-        args->video_v1.row_bytes = (uint32_t)fb->pitch;
-        args->video_v1.width = (uint32_t)fb->width;
-        args->video_v1.height = (uint32_t)fb->height;
-        args->video_v1.depth = fb->bpp;
+        args->video_v1.row_bytes = (uint32_t)fb_pitch;
+        args->video_v1.width = (uint32_t)fb_width;
+        args->video_v1.height = (uint32_t)fb_height;
+        args->video_v1.depth = fb_bpp;
         args->video.display = XNU_GRAPHICS_MODE;
-        args->video.row_bytes = (uint32_t)fb->pitch;
-        args->video.width = (uint32_t)fb->width;
-        args->video.height = (uint32_t)fb->height;
-        args->video.depth = fb->bpp;
+        args->video.row_bytes = (uint32_t)fb_pitch;
+        args->video.width = (uint32_t)fb_width;
+        args->video.height = (uint32_t)fb_height;
+        args->video.depth = fb_bpp;
         args->video.base_addr = fb_phys;
     }
     handoff->boot_args = args;
@@ -1447,12 +1504,18 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
     args->device_tree_length = device_tree_size;
     strcopy_bounded(args->command_line, sizeof(args->command_line), "-v keepsyms=1");
     if (fb != 0) {
-        args->video.base_addr = virt_to_phys(fb->address);
+        uint64_t fb_phys = 0;
+        uint64_t fb_pitch = 0;
+        uint64_t fb_width = 0;
+        uint64_t fb_height = 0;
+        uint32_t fb_bpp = 0;
+        configure_framebuffer_handoff(fb, &fb_phys, &fb_pitch, &fb_width, &fb_height, &fb_bpp);
+        args->video.base_addr = fb_phys;
         args->video.display = XNU_GRAPHICS_MODE;
-        args->video.row_bytes = fb->pitch;
-        args->video.width = fb->width;
-        args->video.height = fb->height;
-        args->video.depth = fb->bpp;
+        args->video.row_bytes = fb_pitch;
+        args->video.width = fb_width;
+        args->video.height = fb_height;
+        args->video.depth = fb_bpp;
     }
     handoff->boot_args = args;
 #else
@@ -1488,6 +1551,55 @@ static void draw_key_hex(struct limine_framebuffer *fb,
     hex64(buf, value);
     draw_text(fb, x, y, key, 2, key_colour);
     draw_text(fb, x + 210, y, buf, 2, value_colour);
+}
+
+static void configure_framebuffer_handoff(struct limine_framebuffer *fb,
+                                         uint64_t *fb_phys_out,
+                                         uint64_t *fb_pitch_out,
+                                         uint64_t *fb_width_out,
+                                         uint64_t *fb_height_out,
+                                         uint32_t *fb_bpp_out) {
+    if (fb == 0) {
+        if (fb_phys_out != 0) {
+            *fb_phys_out = 0;
+        }
+        if (fb_pitch_out != 0) {
+            *fb_pitch_out = 0;
+        }
+        if (fb_width_out != 0) {
+            *fb_width_out = 0;
+        }
+        if (fb_height_out != 0) {
+            *fb_height_out = 0;
+        }
+        if (fb_bpp_out != 0) {
+            *fb_bpp_out = 0;
+        }
+        return;
+    }
+
+    uint64_t fb_phys = virt_to_phys(fb->address);
+    if (fb_phys_out != 0) {
+        *fb_phys_out = fb_phys;
+    }
+    if (fb_pitch_out != 0) {
+        *fb_pitch_out = fb->pitch;
+    }
+    if (fb_width_out != 0) {
+        *fb_width_out = fb->width;
+    }
+    if (fb_height_out != 0) {
+        *fb_height_out = fb->height;
+    }
+    if (fb_bpp_out != 0) {
+        *fb_bpp_out = fb->bpp;
+    }
+
+    serial_key_hex("fb-phys", fb_phys);
+    serial_key_hex("fb-pitch", fb->pitch);
+    serial_key_hex("fb-width", fb->width);
+    serial_key_hex("fb-height", fb->height);
+    serial_key_hex("fb-bpp", fb->bpp);
 }
 
 static int try_jump_xnu(const struct xnu_handoff *handoff) {
@@ -1668,6 +1780,10 @@ void _start(void) {
 #else
         draw_text(fb, x, y, "UNSUPPORTED ARCH BRIDGE", 2, warn);
 #endif
+        y += 28;
+        draw_text(fb, x, y, "LOG", 2, text);
+        y += 24;
+        draw_boot_log(fb, x, y, muted);
         flush_framebuffer(fb);
     }
 
