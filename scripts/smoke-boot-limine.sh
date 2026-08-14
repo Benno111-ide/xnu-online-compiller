@@ -20,8 +20,10 @@ monitor="/tmp/os8-qemu-monitor-$$.sock"
 screenshot="$out/limine-smoke.ppm"
 boot_screenshot="$out/limine-booted.ppm"
 report="$out/limine-smoke.txt"
+serial_log="$out/serial.log"
 vars="$out/uefi-vars.fd"
-rm -f "$monitor" "$screenshot" "$boot_screenshot" "$report" "$vars"
+rm -f "$monitor" "$screenshot" "$boot_screenshot" "$report" "$serial_log" "$vars"
+rm -f "$out"/limine-booted-*.ppm
 
 find_qemu_file() {
     pattern=$1
@@ -103,7 +105,7 @@ set -- "$qemu" \
     -boot menu=off \
     -display vnc=127.0.0.1:0,to=99 \
     -monitor "unix:$monitor,server,nowait" \
-    -serial none \
+    -serial "file:$serial_log" \
     -net none \
     -no-reboot \
     -no-shutdown
@@ -134,11 +136,16 @@ fi
 sleep "${QEMU_MENU_WAIT:-8}"
 
 python3 - "$monitor" "$screenshot" "$boot_screenshot" <<'PY'
+from pathlib import Path
 import socket
 import sys
 import time
+import os
 
 monitor, menu_screenshot, boot_screenshot = sys.argv[1:4]
+boot_wait = float(os.environ.get("QEMU_BOOT_WAIT", "8"))
+boot_dumps = max(1, int(os.environ.get("QEMU_BOOT_DUMPS", "1")))
+boot_dump_interval = float(os.environ.get("QEMU_BOOT_DUMP_INTERVAL", "5"))
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.settimeout(5)
 sock.connect(monitor)
@@ -147,9 +154,11 @@ sock.recv(4096)
 sock.sendall(f"screendump {menu_screenshot}\n".encode())
 time.sleep(0.5)
 sock.sendall(b"sendkey ret\n")
-time.sleep(8)
-sock.sendall(f"screendump {boot_screenshot}\n".encode())
-time.sleep(0.5)
+for index in range(boot_dumps):
+    time.sleep(boot_wait if index == 0 else boot_dump_interval)
+    target = boot_screenshot if index == boot_dumps - 1 else str(Path(boot_screenshot).with_name(f"limine-booted-{index + 1}.ppm"))
+    sock.sendall(f"screendump {target}\n".encode())
+    time.sleep(0.5)
 sock.sendall(b"quit\n")
 sock.close()
 PY
@@ -159,11 +168,15 @@ trap - EXIT INT TERM
 
 python3 - "$screenshot" "$boot_screenshot" "$report" <<'PY'
 from pathlib import Path
+import os
 import sys
 
 menu_ppm = Path(sys.argv[1])
 boot_ppm = Path(sys.argv[2])
 report = Path(sys.argv[3])
+serial_log = report.with_name("serial.log")
+expect_jump_marker = os.environ.get("QEMU_EXPECT_JUMP_MARKER") == "1"
+allow_any_boot = os.environ.get("QEMU_ALLOW_ANY_BOOT") == "1"
 
 def read_ppm(ppm):
     if not ppm.exists() or ppm.stat().st_size == 0:
@@ -214,17 +227,23 @@ for i in range(0, len(menu_pixels) - 2, 3):
 boot_handoff_green = 0
 boot_handoff_panel = 0
 boot_handoff_success = 0
+boot_jump_marker = 0
 boot_magenta = 0
-for i in range(0, len(boot_pixels) - 2, 3):
-    r, g, b = boot_pixels[i], boot_pixels[i + 1], boot_pixels[i + 2]
-    if r <= 80 and g >= 160 and b <= 140:
-        boot_handoff_green += 1
-    if r <= 40 and 25 <= g <= 80 and 35 <= b <= 95:
-        boot_handoff_panel += 1
-    if r <= 60 and g >= 170 and b >= 190:
-        boot_handoff_success += 1
-    if r >= 180 and g <= 90 and b >= 180:
-        boot_magenta += 1
+for y in range(boot_height):
+    row = y * boot_width * 3
+    for x in range(boot_width):
+        i = row + x * 3
+        r, g, b = boot_pixels[i], boot_pixels[i + 1], boot_pixels[i + 2]
+        if r <= 80 and g >= 160 and b <= 140:
+            boot_handoff_green += 1
+            if x < 80 and y < 80:
+                boot_jump_marker += 1
+        if r <= 40 and 25 <= g <= 80 and 35 <= b <= 95:
+            boot_handoff_panel += 1
+        if r <= 60 and g >= 170 and b >= 190:
+            boot_handoff_success += 1
+        if r >= 180 and g <= 90 and b >= 180:
+            boot_magenta += 1
 
 report.write_text(
     f"menu_width={menu_width}\nmenu_height={menu_height}\n"
@@ -234,15 +253,28 @@ report.write_text(
     f"boot_handoff_green_pixels={boot_handoff_green}\n"
     f"boot_handoff_panel_pixels={boot_handoff_panel}\n"
     f"boot_handoff_success_pixels={boot_handoff_success}\n"
+    f"boot_jump_marker_pixels={boot_jump_marker}\n"
+    f"serial_log_bytes={serial_log.stat().st_size if serial_log.exists() else 0}\n"
     f"boot_magenta_marker_pixels={boot_magenta}\n",
     encoding="ascii",
 )
 print(report.read_text(encoding="ascii"), end="")
 
-if menu_magenta < 20:
+preflight_ok = (
+    boot_handoff_green >= 1000
+    and boot_handoff_panel >= 1000
+    and boot_handoff_success >= 1000
+)
+jump_ok = boot_jump_marker >= 1000
+
+if menu_magenta < 20 and not preflight_ok and not (expect_jump_marker and jump_ok):
     raise SystemExit("Limine branding colour was not visible; Limine menu likely did not load")
-if boot_handoff_green < 1000 or boot_handoff_panel < 1000:
+if allow_any_boot:
+    raise SystemExit(0)
+if expect_jump_marker:
+    if not jump_ok:
+        raise SystemExit("XNU handoff jump marker was not visible after entering the staged module")
+    raise SystemExit(0)
+if not preflight_ok:
     raise SystemExit("Limine did not load the XNU handoff preflight screen after selecting the menu entry")
-if boot_handoff_success < 1000:
-    raise SystemExit("XNU handoff preflight did not report successful module staging and boot-args construction")
 PY

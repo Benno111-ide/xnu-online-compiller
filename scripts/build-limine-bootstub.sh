@@ -201,7 +201,7 @@ struct limine_rsdp_request {
 };
 
 __attribute__((used, section(".limine_requests")))
-static volatile uint64_t limine_base_revision[3] = LIMINE_BASE_REVISION(4);
+static volatile uint64_t limine_base_revision[3] = LIMINE_BASE_REVISION(6);
 
 __attribute__((used, section(".limine_requests")))
 static volatile struct limine_framebuffer_request framebuffer_request = {
@@ -744,6 +744,7 @@ struct xnu_boot_args_arm64 {
 struct xnu_handoff {
     void *boot_args;
     uint64_t boot_args_phys;
+    uint64_t identity_pagetable_phys;
     uint64_t memory_map_phys;
     uint64_t memory_map_size;
     uint64_t allocator_base;
@@ -752,6 +753,7 @@ struct xnu_handoff {
     uint64_t kernel_phys;
     uint64_t kernel_size;
     uint64_t kernel_entry_phys;
+    uint64_t top_of_kernel_data;
     uint32_t status;
 };
 
@@ -828,6 +830,33 @@ static uint32_t bswap32(uint32_t value) {
          | ((value & 0x00ff0000U) >> 8)
          | ((value & 0xff000000U) >> 24);
 }
+
+#if defined(__aarch64__)
+#define ARM64_TABLE_DESC 0x3ULL
+#define ARM64_BLOCK_DESC 0x701ULL
+#define ARM64_L1_BLOCK_SIZE 0x40000000ULL
+
+static int build_arm64_identity_map(struct boot_allocator *allocator, uint64_t *table_phys_out) {
+    uint64_t l0_phys = 0;
+    uint64_t l1_phys = 0;
+    uint64_t *l0 = (uint64_t *)boot_alloc(allocator, 0x1000, 0x1000, &l0_phys);
+    uint64_t *l1 = (uint64_t *)boot_alloc(allocator, 0x1000, 0x1000, &l1_phys);
+    if (l0 == 0 || l1 == 0) {
+        return 0;
+    }
+
+    memzero(l0, 0x1000);
+    memzero(l1, 0x1000);
+    l0[0] = (l1_phys & 0x0000fffffffff000ULL) | ARM64_TABLE_DESC;
+    for (uint64_t i = 0; i < 512; i++) {
+        uint64_t phys = i * ARM64_L1_BLOCK_SIZE;
+        l1[i] = (phys & 0x0000ffffc0000000ULL) | ARM64_BLOCK_DESC;
+    }
+
+    *table_phys_out = l0_phys;
+    return 1;
+}
+#endif
 
 static int range_ok(uint64_t base, uint64_t size, uint64_t need) {
     return base <= size && need <= size - base;
@@ -1113,12 +1142,13 @@ static int build_minimal_device_tree(struct boot_allocator *allocator,
 
     uint8_t *p = dt;
     struct apple_dt_node *root = (struct apple_dt_node *)p;
-    root->n_properties = 3;
-    root->n_children = 1;
+    root->n_properties = 4;
+    root->n_children = 2;
     p += sizeof(*root);
     p = dt_write_string_prop(p, "name", "device-tree");
     p = dt_write_string_prop(p, "compatible", "openai,os8-limine");
     p = dt_write_string_prop(p, "model", "OS8 Limine Virtual Machine");
+    p = dt_write_string_prop(p, "target-type", "OS8-Limine");
 
     struct apple_dt_node *cpus = (struct apple_dt_node *)p;
     cpus->n_properties = 2;
@@ -1139,6 +1169,26 @@ static int build_minimal_device_tree(struct boot_allocator *allocator,
     uint32_t bus_frequency = 100000000;
     p = dt_write_prop(p, "timebase-frequency", &timebase, sizeof(timebase));
     p = dt_write_prop(p, "bus-frequency", &bus_frequency, sizeof(bus_frequency));
+
+    struct apple_dt_node *chosen = (struct apple_dt_node *)p;
+    chosen->n_properties = 6;
+    chosen->n_children = 1;
+    p += sizeof(*chosen);
+    p = dt_write_string_prop(p, "name", "chosen");
+    uint32_t debug_enabled = 1;
+    uint32_t dram_vendor_id = 0;
+    uint64_t unique_chip_id = 0;
+    p = dt_write_prop(p, "debug-enabled", &debug_enabled, sizeof(debug_enabled));
+    p = dt_write_string_prop(p, "firmware-version", "limine-os8");
+    p = dt_write_string_prop(p, "system-firmware-version", "limine-os8");
+    p = dt_write_prop(p, "unique-chip-id", &unique_chip_id, sizeof(unique_chip_id));
+    p = dt_write_prop(p, "dram-vendor-id", &dram_vendor_id, sizeof(dram_vendor_id));
+
+    struct apple_dt_node *chosen_memory_map = (struct apple_dt_node *)p;
+    chosen_memory_map->n_properties = 1;
+    chosen_memory_map->n_children = 0;
+    p += sizeof(*chosen_memory_map);
+    p = dt_write_string_prop(p, "name", "memory-map");
 
     *dt_virt = dt;
     *dt_phys = phys;
@@ -1267,6 +1317,11 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
     }
     handoff->boot_args = args;
 #elif defined(__aarch64__)
+    if (!build_arm64_identity_map(&allocator, &handoff->identity_pagetable_phys)) {
+        handoff->status = 10;
+        return 0;
+    }
+
     struct xnu_boot_args_arm64 *args = (struct xnu_boot_args_arm64 *)
         boot_alloc(&allocator, sizeof(*args), 0x1000, &boot_args_phys);
     if (args == 0) {
@@ -1280,8 +1335,8 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
     args->phys_base = handoff->kernel_phys;
     args->mem_size = handoff->physical_memory_size;
     args->mem_size_actual = handoff->physical_memory_size;
-    args->top_of_kernel_data = align_up(handoff->kernel_phys + handoff->kernel_size, 0x4000);
-    args->device_tree_p = device_tree;
+    args->top_of_kernel_data = align_up(allocator.cursor, 0x4000);
+    args->device_tree_p = (void *)(uintptr_t)(args->virt_base + device_tree_phys - args->phys_base);
     args->device_tree_length = device_tree_size;
     strcopy_bounded(args->command_line, sizeof(args->command_line), "-v keepsyms=1");
     if (fb != 0) {
@@ -1300,6 +1355,9 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
 
     handoff->boot_args_phys = boot_args_phys;
     handoff->allocator_used = allocator.cursor - allocator.base;
+#if defined(__aarch64__)
+    handoff->top_of_kernel_data = ((struct xnu_boot_args_arm64 *)args)->top_of_kernel_data;
+#endif
     handoff->status = 0;
     debug_stage(8, 0, 210, 255);
     return 1;
@@ -1327,7 +1385,8 @@ static void draw_key_hex(struct limine_framebuffer *fb,
 
 static int try_jump_xnu(const struct xnu_handoff *handoff) {
 #if XNU_HANDOFF_JUMP && defined(__aarch64__)
-    if (handoff->status != 0 || handoff->kernel_entry_phys == 0 || handoff->boot_args == 0) {
+    if (handoff->status != 0 || handoff->kernel_entry_phys == 0 ||
+        handoff->boot_args == 0 || handoff->identity_pagetable_phys == 0) {
         return 0;
     }
 
@@ -1337,18 +1396,29 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     }
 
     void *entry = (void *)(uintptr_t)(hhdm->offset + handoff->kernel_entry_phys);
+    uint64_t boot_args_phys = handoff->boot_args_phys;
+    uint64_t identity_ttbr0 = handoff->identity_pagetable_phys;
     flush_range_to_poc((void *)(uintptr_t)(hhdm->offset + handoff->kernel_phys), handoff->kernel_size);
     flush_range_to_poc(handoff->boot_args, 0x1000);
+    flush_range_to_poc((void *)(uintptr_t)(hhdm->offset + handoff->identity_pagetable_phys), 0x2000);
 
     __asm__ volatile (
+        "dsb ish\n"
+        "msr ttbr0_el1, %2\n"
+        "isb\n"
+        "tlbi vmalle1\n"
+        "dsb ish\n"
+        "isb\n"
         "mov x0, %0\n"
+        "mov x20, %0\n"
+        "mov x21, xzr\n"
         "mov x1, xzr\n"
         "mov x2, xzr\n"
         "mov x3, xzr\n"
         "br %1\n"
         :
-        : "r"(handoff->boot_args), "r"(entry)
-        : "x0", "x1", "x2", "x3", "memory");
+        : "r"(boot_args_phys), "r"(entry), "r"(identity_ttbr0)
+        : "x0", "x1", "x2", "x3", "x20", "x21", "memory");
     __builtin_unreachable();
 #else
     (void)handoff;
@@ -1444,13 +1514,19 @@ void _start(void) {
         y += 28;
         draw_key_hex(fb, x, y, "ENTRY PHYS", handoff.kernel_entry_phys, muted, handoff_ok ? marker : warn);
         y += 28;
+#if defined(__aarch64__)
+        draw_key_hex(fb, x, y, "TOP KDATA", handoff.top_of_kernel_data, muted, handoff_ok ? marker : warn);
+        y += 28;
+        draw_key_hex(fb, x, y, "TTBR0 IDMAP", handoff.identity_pagetable_phys, muted, handoff_ok ? marker : warn);
+        y += 28;
+#endif
         draw_key_hex(fb, x, y, "HANDOFF STAT", handoff.status, muted, handoff_ok ? marker : warn);
         y += 38;
 
 #if defined(__x86_64__)
         draw_text(fb, x, y, "X86 BRIDGE STILL NEEDS 32-BIT BOOTER ENTRY", 2, warn);
 #elif defined(__aarch64__)
-        draw_text(fb, x, y, "ARM64 BRIDGE STILL NEEDS EL1 BOOTARGS MAP", 2, warn);
+        draw_text(fb, x, y, "ARM64 JUMP READY: PHYS BOOTARGS + TTBR0 IDMAP", 2, marker);
 #else
         draw_text(fb, x, y, "UNSUPPORTED ARCH BRIDGE", 2, warn);
 #endif

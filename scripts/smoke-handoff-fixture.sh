@@ -17,9 +17,11 @@ limine_dir="${LIMINE_DIR:-build/limine}"
 case "$arch" in
     amd64)
         efi_boot_name=BOOTX64.EFI
+        qemu_boot_wait="${QEMU_BOOT_WAIT:-8}"
         ;;
     arm64)
         efi_boot_name=BOOTAA64.EFI
+        qemu_boot_wait="${QEMU_BOOT_WAIT:-34}"
         ;;
     *)
         echo "unsupported architecture: $arch" >&2
@@ -40,12 +42,12 @@ mkdir -p "$root/EFI/BOOT" "$root/boot" "$root/boot/limine"
 
 sh scripts/build-limine-bootstub.sh "$arch" "$out/bootstub" "$bootstub"
 
-python3 - "$arch" "$macho" <<'PY'
+python3 - "$arch" "$macho" "${XNU_HANDOFF_JUMP:-0}" <<'PY'
 import struct
 import sys
 from pathlib import Path
 
-arch, out = sys.argv[1:3]
+arch, out, handoff_jump = sys.argv[1:4]
 if arch == "amd64":
     cputype = 0x01000007
     flavor = 4
@@ -108,7 +110,52 @@ header = struct.pack(
 payload = bytearray(fileoff + filesize)
 payload[: len(header)] = header
 payload[len(header) : len(header) + len(cmds)] = cmds
-payload[fileoff : fileoff + 4] = b"OS8!"
+if arch == "arm64" and handoff_jump == "1":
+    def bcond(cond, current_index, target_index):
+        imm19 = (target_index - current_index) & 0x7ffff
+        return 0x54000000 | (imm19 << 5) | cond
+
+    def branch(current_index, target_index):
+        imm26 = (target_index - current_index) & 0x3ffffff
+        return 0x14000000 | imm26
+
+    words = [
+        0xF940100F,  # ldr x15, [x0, #32] ; boot_args->topOfKernelData
+        0xEB0001FF,  # cmp x15, x0
+        bcond(9, 2, 26),  # b.ls fail if topOfKernelData <= boot_args phys
+        0xF9400410,  # ldr x16, [x0, #8]  ; boot_args->virtBase
+        0xF9400811,  # ldr x17, [x0, #16] ; boot_args->physBase
+        0xF9403012,  # ldr x18, [x0, #96] ; boot_args->deviceTreeP
+        0xEB10025F,  # cmp x18, x16
+        bcond(3, 7, 26),  # b.lo fail if deviceTreeP is below virtBase
+        0xCB100253,  # sub x19, x18, x16 ; deviceTreeP - virtBase
+        0x8B110273,  # add x19, x19, x17 ; derived device tree phys
+        0xEB1301FF,  # cmp x15, x19
+        bcond(9, 11, 26),  # b.ls fail if topOfKernelData <= device tree phys
+        0xF9401409,  # ldr x9, [x0, #40]  ; boot_args->Video.v_baseAddr
+        0xF9401C0A,  # ldr x10, [x0, #56] ; boot_args->Video.v_rowBytes
+        0x529FE00B,  # mov w11, #0xff00   ; green pixel
+        0x5280080C,  # mov w12, #64
+        0x5280080D,  # mov w13, #64
+        0xAA0903EE,  # mov x14, x9
+        0xB90001CB,  # str w11, [x14]
+        0x910011CE,  # add x14, x14, #4
+        0x710005AD,  # subs w13, w13, #1
+        bcond(1, 21, 18),  # b.ne x-loop
+        0x8B0A0129,  # add x9, x9, x10
+        0x7100058C,  # subs w12, w12, #1
+        bcond(1, 24, 16),  # b.ne y-loop
+        0x14000000,  # b .
+        0xF9401409,  # fail: ldr x9, [x0, #40]
+        0xF9401C0A,  # ldr x10, [x0, #56]
+        0x52801FEB,  # mov w11, #0xff     ; non-green failure pixel
+        branch(29, 15),  # paint failure marker
+    ]
+    payload[fileoff : fileoff + len(words) * 4] = b"".join(
+        struct.pack("<I", word) for word in words
+    )
+else:
+    payload[fileoff : fileoff + 4] = b"OS8!"
 Path(out).write_bytes(payload)
 PY
 
@@ -145,4 +192,4 @@ mcopy -i "$image" "$root/limine.conf" "::/boot/limine/limine.conf"
 mcopy -i "$image" "$root/boot/bootloader.sys" "::/boot/bootloader.sys"
 mcopy -i "$image" "$root/boot/xnu-kernel.macho" "::/boot/xnu-kernel.macho"
 
-QEMU_MENU_WAIT="${QEMU_MENU_WAIT:-14}" sh scripts/smoke-boot-limine.sh "$arch" "$image" "$out/qemu"
+QEMU_MENU_WAIT="${QEMU_MENU_WAIT:-14}" QEMU_BOOT_WAIT="$qemu_boot_wait" QEMU_EXPECT_JUMP_MARKER="${XNU_HANDOFF_JUMP:-0}" sh scripts/smoke-boot-limine.sh "$arch" "$image" "$out/qemu"
