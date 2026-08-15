@@ -384,6 +384,13 @@ static void serial_key_hex(const char *key, uint64_t value) {
     serial_write("\n");
 }
 
+static void configure_framebuffer_handoff(struct limine_framebuffer *fb,
+                                         uint64_t *fb_phys_out,
+                                         uint64_t *fb_pitch_out,
+                                         uint64_t *fb_width_out,
+                                         uint64_t *fb_height_out,
+                                         uint32_t *fb_bpp_out);
+
 #if XNU_HANDOFF_JUMP && defined(__aarch64__)
 static void flush_range_to_poc(const void *address, uint64_t size) {
     uint64_t ctr_el0;
