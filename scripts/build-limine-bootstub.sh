@@ -1711,7 +1711,19 @@ void _start(void) {
         serial_key_hex("identity-pagetable", handoff.identity_pagetable_phys);
 #endif
         if (handoff_ok) {
-            (void)try_jump_xnu(&handoff);
+            int jumped = try_jump_xnu(&handoff);
+            int retry = 0;
+            while (!jumped && retry < 5) {
+                serial_write("os8-handoff: retrying jump\n");
+                for (volatile uint64_t d = 0; d < 2000000; d++) {
+                    __asm__ volatile ("nop");
+                }
+                jumped = try_jump_xnu(&handoff);
+                retry++;
+            }
+            if (!jumped) {
+                serial_write("os8-handoff: jump failed, falling back to on-screen state\n");
+            }
         }
 
         uint32_t background = make_pixel(fb, 8, 18, 28);
