@@ -1,6 +1,12 @@
 ARCH ?= amd64
 XNU_SOURCE_DIR ?= build/xnu-source
 XNU_KERNEL_ARTIFACT ?=
+
+# If a local prebuilt kernel exists, use it by default for local builds.
+# Place a prebuilt Mach-O at `build/prebuilt/xnu-kernel.macho` to opt-in.
+ifneq ($(wildcard build/prebuilt/xnu-kernel.macho),)
+XNU_KERNEL_ARTIFACT ?= build/prebuilt/xnu-kernel.macho
+endif
 XNU_HANDOFF_JUMP ?= 0
 XNU_HANDOFF_DEBUG ?= 0
 QEMU_MENU_WAIT ?= 14
