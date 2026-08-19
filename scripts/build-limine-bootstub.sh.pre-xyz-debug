@@ -1019,7 +1019,6 @@ static int build_x86_bootstrap_map(
     uint64_t hhdm_offset,
     uint64_t executable_virtual_base,
     uint64_t executable_physical_base,
-    uint64_t max_phys,
     uint64_t *pml4_phys_out
 ) {
     uint64_t pml4_phys = 0;
@@ -1042,23 +1041,7 @@ static int build_x86_bootstrap_map(
     pml4[511] =
         (pdpt_phys & 0x000ffffffffff000ULL) | X86_PAGE_TABLE_FLAGS;
 
-    if (max_phys < X86_1G) {
-        max_phys = X86_1G;
-    }
-
-    uint64_t gigabyte_count =
-        align_up(max_phys, X86_1G) / X86_1G;
-
-    if (gigabyte_count > 512) {
-        gigabyte_count = 512;
-    }
-
-    serial_key_hex("x86-map-max-phys", max_phys);
-    serial_key_hex("x86-map-gigabytes", gigabyte_count);
-
-    for (uint64_t gigabyte = 0;
-         gigabyte < gigabyte_count;
-         gigabyte++) {
+    for (uint64_t gigabyte = 0; gigabyte < 4; gigabyte++) {
         uint64_t pd_phys = 0;
         uint64_t *pd = (uint64_t *)boot_alloc(
             allocator, 0x1000, 0x1000, &pd_phys);
@@ -1608,35 +1591,11 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
             executable_address_request.response->physical_base;
     }
 
-    uint64_t x86_map_end = handoff->physical_memory_size;
-
-    uint64_t kernel_end =
-        handoff->kernel_phys + handoff->kernel_size;
-    if (kernel_end > x86_map_end) {
-        x86_map_end = kernel_end;
-    }
-
-    uint64_t allocator_end =
-        allocator.base + allocator.size;
-    if (allocator_end > x86_map_end) {
-        x86_map_end = allocator_end;
-    }
-
-    if (fb != 0) {
-        uint64_t fb_phys = virt_to_phys(fb->address);
-        uint64_t fb_end =
-            fb_phys + fb->pitch * fb->height;
-        if (fb_end > x86_map_end) {
-            x86_map_end = fb_end;
-        }
-    }
-
     if (!build_x86_bootstrap_map(
             &allocator,
             hhdm->offset,
             executable_virtual_base,
             executable_physical_base,
-            x86_map_end,
             &handoff->identity_pagetable_phys)) {
         handoff->status = 11;
         return 0;
@@ -1873,43 +1832,25 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     serial_key_hex("old-cr3", old_cr3);
     serial_write("os8-handoff: x86 jumping\n");
 
-    /*
-     * Diagnostic transition:
-     * X = survived CR3 switch
-     * Y = HHDM access succeeded
-     * Z = new stack installed
-     */
-    uint64_t boot_args_hhdm =
-        hhdm->offset + handoff->boot_args_phys;
-
     __asm__ volatile (
         "cli\n"
         "cld\n"
-        "mov %0, %%cr3\n"
-        "mov $0x58, %%al\n"
-        "outb %%al, $0x3f8\n"
-        "mov %1, %%rax\n"
-        "mov (%%rax), %%rax\n"
-        "mov $0x59, %%al\n"
-        "outb %%al, $0x3f8\n"
-        "mov %2, %%rsp\n"
+        "mov %0, %%rsp\n"
         "xor %%rbp, %%rbp\n"
-        "mov $0x5a, %%al\n"
-        "outb %%al, $0x3f8\n"
-        "mov %3, %%rdi\n"
+        "mov %1, %%cr3\n"
+        "mov %2, %%rdi\n"
         "xor %%rsi, %%rsi\n"
         "xor %%rdx, %%rdx\n"
         "xor %%rcx, %%rcx\n"
         "xor %%r8, %%r8\n"
         "xor %%r9, %%r9\n"
-        "jmp *%4\n"
+        "jmp *%3\n"
         :
-        : "r"(new_cr3),
-          "r"(boot_args_hhdm),
-          "r"(stack_top),
+        : "r"(stack_top),
+          "r"(new_cr3),
           "r"(boot_args),
           "r"(entry)
-        : "rax", "rdi", "rsi", "rdx", "rcx", "r8", "r9", "memory"
+        : "rdi", "rsi", "rdx", "rcx", "r8", "r9", "memory"
     );
 
     __builtin_unreachable();
@@ -2101,7 +2042,7 @@ void _start(void) {
         y += 38;
 
 #if defined(__x86_64__)
-        draw_text(fb, x, y, "X86-64 XNU JUMP ENABLED: CHECK SERIAL X/Y/Z", 2, warn);
+        draw_text(fb, x, y, "X86 BRIDGE STILL NEEDS 32-BIT BOOTER ENTRY", 2, warn);
 #elif defined(__aarch64__)
         draw_text(fb, x, y, "ARM64 JUMP READY: PHYS BOOTARGS + TTBR0 IDMAP", 2, marker);
 #else
