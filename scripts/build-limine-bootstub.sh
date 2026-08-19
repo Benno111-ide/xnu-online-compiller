@@ -45,6 +45,7 @@ cat > "$kernel_c" <<'SOURCE'
 #define LIMINE_EFI_SYSTEM_TABLE_REQUEST { LIMINE_COMMON_MAGIC, 0x5ceba5163eaaf6d6, 0x0a6981610cf65fcc }
 #define LIMINE_EFI_MEMMAP_REQUEST { LIMINE_COMMON_MAGIC, 0x7df62a431d6872d5, 0xa4fcdfb3e57306c8 }
 #define LIMINE_RSDP_REQUEST { LIMINE_COMMON_MAGIC, 0xc5e77b6b397e7b43, 0x27637845accdcf3c }
+#define LIMINE_EXECUTABLE_ADDRESS_REQUEST { LIMINE_COMMON_MAGIC, 0x71ba76863cc55f63, 0xb2644a48c516a487 }
 #define LIMINE_INTERNAL_MODULE_REQUIRED (1 << 0)
 #define LIMINE_REQUESTS_START_MARKER { 0xf6b8f4b39de7d1ae, 0xfab91a6940fcb9cf, 0x785c6ed015d3e316, 0x181e920a7852b9d9 }
 #define LIMINE_REQUESTS_END_MARKER { 0xadc0e0531bb10d03, 0x9572709f31764c62 }
@@ -200,6 +201,18 @@ struct limine_rsdp_request {
     struct limine_rsdp_response *response;
 };
 
+struct limine_executable_address_response {
+    uint64_t revision;
+    uint64_t physical_base;
+    uint64_t virtual_base;
+};
+
+struct limine_executable_address_request {
+    uint64_t id[4];
+    uint64_t revision;
+    struct limine_executable_address_response *response;
+};
+
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[3] = LIMINE_BASE_REVISION(6);
 
@@ -253,6 +266,13 @@ static volatile struct limine_efi_memmap_request efi_memmap_request = {
 __attribute__((used, section(".limine_requests")))
 static volatile struct limine_rsdp_request rsdp_request = {
     .id = LIMINE_RSDP_REQUEST,
+    .revision = 0,
+    .response = 0
+};
+
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_executable_address_request executable_address_request = {
+    .id = LIMINE_EXECUTABLE_ADDRESS_REQUEST,
     .revision = 0,
     .response = 0
 };
@@ -861,7 +881,10 @@ struct xnu_handoff {
     uint64_t kernel_phys;
     uint64_t kernel_size;
     uint64_t kernel_entry_phys;
+    uint64_t kernel_entry_virt;
     uint64_t top_of_kernel_data;
+    uint64_t jump_stack_phys;
+    uint64_t jump_stack_size;
     uint32_t status;
 };
 
@@ -978,6 +1001,118 @@ static int build_arm64_identity_map(struct boot_allocator *allocator, uint64_t *
     *table_phys_out = l0_phys;
     return 1;
 }
+#endif
+
+#if defined(__x86_64__)
+
+#define X86_PAGE_PRESENT 0x001ULL
+#define X86_PAGE_WRITE   0x002ULL
+#define X86_PAGE_PS      0x080ULL
+#define X86_PAGE_TABLE_FLAGS (X86_PAGE_PRESENT | X86_PAGE_WRITE)
+#define X86_LARGE_PAGE_FLAGS (X86_PAGE_PRESENT | X86_PAGE_WRITE | X86_PAGE_PS)
+#define X86_2M   0x00200000ULL
+#define X86_1G   0x40000000ULL
+#define X86_512G 0x8000000000ULL
+
+static int build_x86_bootstrap_map(
+    struct boot_allocator *allocator,
+    uint64_t hhdm_offset,
+    uint64_t executable_virtual_base,
+    uint64_t executable_physical_base,
+    uint64_t *pml4_phys_out
+) {
+    uint64_t pml4_phys = 0;
+    uint64_t pdpt_phys = 0;
+
+    uint64_t *pml4 = (uint64_t *)boot_alloc(
+        allocator, 0x1000, 0x1000, &pml4_phys);
+    uint64_t *pdpt = (uint64_t *)boot_alloc(
+        allocator, 0x1000, 0x1000, &pdpt_phys);
+
+    if (pml4 == 0 || pdpt == 0) {
+        return 0;
+    }
+
+    memzero(pml4, 0x1000);
+    memzero(pdpt, 0x1000);
+
+    pml4[0] =
+        (pdpt_phys & 0x000ffffffffff000ULL) | X86_PAGE_TABLE_FLAGS;
+    pml4[511] =
+        (pdpt_phys & 0x000ffffffffff000ULL) | X86_PAGE_TABLE_FLAGS;
+
+    for (uint64_t gigabyte = 0; gigabyte < 4; gigabyte++) {
+        uint64_t pd_phys = 0;
+        uint64_t *pd = (uint64_t *)boot_alloc(
+            allocator, 0x1000, 0x1000, &pd_phys);
+
+        if (pd == 0) {
+            return 0;
+        }
+
+        memzero(pd, 0x1000);
+        pdpt[gigabyte] =
+            (pd_phys & 0x000ffffffffff000ULL) | X86_PAGE_TABLE_FLAGS;
+
+        for (uint64_t page = 0; page < 512; page++) {
+            uint64_t physical = gigabyte * X86_1G + page * X86_2M;
+            pd[page] =
+                (physical & 0x000fffffffe00000ULL) | X86_LARGE_PAGE_FLAGS;
+        }
+    }
+
+    if ((hhdm_offset & (X86_512G - 1)) != 0) {
+        serial_write("os8-handoff: x86 hhdm is not PML4 aligned\n");
+        return 0;
+    }
+
+    uint64_t hhdm_slot = (hhdm_offset >> 39) & 0x1ff;
+    pml4[hhdm_slot] =
+        (pdpt_phys & 0x000ffffffffff000ULL) | X86_PAGE_TABLE_FLAGS;
+
+    if (executable_virtual_base != 0 &&
+        executable_physical_base != 0) {
+        uint64_t exec_va = align_down(executable_virtual_base, X86_2M);
+        uint64_t exec_pa = align_down(executable_physical_base, X86_2M);
+        uint64_t pml4_index = (exec_va >> 39) & 0x1ff;
+        uint64_t pdpt_index = (exec_va >> 30) & 0x1ff;
+        uint64_t pd_index = (exec_va >> 21) & 0x1ff;
+
+        if (pml4_index == 0 || pml4_index == 511) {
+            uint64_t existing_pd_phys =
+                pdpt[pdpt_index] & 0x000ffffffffff000ULL;
+            uint64_t *pd = 0;
+
+            if (existing_pd_phys == 0) {
+                uint64_t new_pd_phys = 0;
+                pd = (uint64_t *)boot_alloc(
+                    allocator, 0x1000, 0x1000, &new_pd_phys);
+                if (pd == 0) {
+                    return 0;
+                }
+                memzero(pd, 0x1000);
+                pdpt[pdpt_index] =
+                    new_pd_phys | X86_PAGE_TABLE_FLAGS;
+            } else {
+                struct limine_hhdm_response *hhdm = hhdm_request.response;
+                if (hhdm == 0) {
+                    return 0;
+                }
+                pd = (uint64_t *)(uintptr_t)(
+                    hhdm->offset + existing_pd_phys);
+            }
+
+            pd[pd_index] =
+                (exec_pa & 0x000fffffffe00000ULL) | X86_LARGE_PAGE_FLAGS;
+        }
+    }
+
+    *pml4_phys_out = pml4_phys;
+    serial_key_hex("x86-bootstrap-pml4", pml4_phys);
+    serial_key_hex("x86-hhdm-slot", hhdm_slot);
+    return 1;
+}
+
 #endif
 
 static int range_ok(uint64_t base, uint64_t size, uint64_t need) {
@@ -1412,6 +1547,8 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
         handoff->status = 6;
         return 0;
     }
+
+    handoff->kernel_entry_virt = macho->entry;
     debug_stage(4, 255, 255, 255);
 
     for (uint64_t i = 0; i < memmap->entry_count; i++) {
@@ -1439,6 +1576,43 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
     debug_stage(6, 255, 255, 255);
 
 #if defined(__x86_64__)
+    struct limine_hhdm_response *hhdm = hhdm_request.response;
+    if (hhdm == 0) {
+        handoff->status = 10;
+        return 0;
+    }
+
+    uint64_t executable_virtual_base = 0;
+    uint64_t executable_physical_base = 0;
+    if (executable_address_request.response != 0) {
+        executable_virtual_base =
+            executable_address_request.response->virtual_base;
+        executable_physical_base =
+            executable_address_request.response->physical_base;
+    }
+
+    if (!build_x86_bootstrap_map(
+            &allocator,
+            hhdm->offset,
+            executable_virtual_base,
+            executable_physical_base,
+            &handoff->identity_pagetable_phys)) {
+        handoff->status = 11;
+        return 0;
+    }
+
+    handoff->jump_stack_size = 0x10000;
+    void *jump_stack = boot_alloc(
+        &allocator,
+        handoff->jump_stack_size,
+        0x1000,
+        &handoff->jump_stack_phys);
+    if (jump_stack == 0) {
+        handoff->status = 12;
+        return 0;
+    }
+    memzero(jump_stack, handoff->jump_stack_size);
+
     struct xnu_boot_args_x86 *args = (struct xnu_boot_args_x86 *)
         boot_alloc(&allocator, sizeof(*args), 0x1000, &boot_args_phys);
     if (args == 0) {
@@ -1610,7 +1784,78 @@ static void configure_framebuffer_handoff(struct limine_framebuffer *fb,
 }
 
 static int try_jump_xnu(const struct xnu_handoff *handoff) {
-#if XNU_HANDOFF_JUMP && defined(__aarch64__)
+#if XNU_HANDOFF_JUMP && defined(__x86_64__)
+    if (handoff->status != 0) {
+        serial_write("os8-handoff: x86 jump skipped bad handoff\n");
+        return 0;
+    }
+    if (handoff->kernel_entry_virt == 0 ||
+        handoff->kernel_entry_phys == 0) {
+        serial_write("os8-handoff: x86 jump skipped no entry\n");
+        return 0;
+    }
+    if (handoff->boot_args_phys == 0) {
+        serial_write("os8-handoff: x86 jump skipped no boot args\n");
+        return 0;
+    }
+    if (handoff->identity_pagetable_phys == 0) {
+        serial_write("os8-handoff: x86 jump skipped no pml4\n");
+        return 0;
+    }
+    if (handoff->jump_stack_phys == 0 ||
+        handoff->jump_stack_size == 0) {
+        serial_write("os8-handoff: x86 jump skipped no stack\n");
+        return 0;
+    }
+
+    struct limine_hhdm_response *hhdm = hhdm_request.response;
+    if (hhdm == 0) {
+        serial_write("os8-handoff: x86 jump skipped no hhdm\n");
+        return 0;
+    }
+
+    uint64_t new_cr3 = handoff->identity_pagetable_phys;
+    uint64_t entry = handoff->kernel_entry_virt;
+    uint64_t boot_args = handoff->boot_args_phys;
+    uint64_t stack_top =
+        hhdm->offset + handoff->jump_stack_phys +
+        handoff->jump_stack_size - 16;
+
+    serial_key_hex("jump-entry-phys", handoff->kernel_entry_phys);
+    serial_key_hex("jump-entry-virt", entry);
+    serial_key_hex("jump-boot-args", boot_args);
+    serial_key_hex("jump-cr3", new_cr3);
+    serial_key_hex("jump-stack", stack_top);
+
+    uint64_t old_cr3;
+    __asm__ volatile ("mov %%cr3, %0" : "=r"(old_cr3));
+    serial_key_hex("old-cr3", old_cr3);
+    serial_write("os8-handoff: x86 jumping\n");
+
+    __asm__ volatile (
+        "cli\n"
+        "cld\n"
+        "mov %0, %%rsp\n"
+        "xor %%rbp, %%rbp\n"
+        "mov %1, %%cr3\n"
+        "mov %2, %%rdi\n"
+        "xor %%rsi, %%rsi\n"
+        "xor %%rdx, %%rdx\n"
+        "xor %%rcx, %%rcx\n"
+        "xor %%r8, %%r8\n"
+        "xor %%r9, %%r9\n"
+        "jmp *%3\n"
+        :
+        : "r"(stack_top),
+          "r"(new_cr3),
+          "r"(boot_args),
+          "r"(entry)
+        : "rdi", "rsi", "rdx", "rcx", "r8", "r9", "memory"
+    );
+
+    __builtin_unreachable();
+
+#elif XNU_HANDOFF_JUMP && defined(__aarch64__)
     if (handoff->status != 0 || handoff->kernel_entry_phys == 0 ||
         handoff->boot_args == 0 || handoff->identity_pagetable_phys == 0) {
         serial_write("os8-handoff: jump skipped\n");
@@ -1710,10 +1955,14 @@ void _start(void) {
         serial_key_hex("kernel-load", handoff.kernel_phys);
         serial_key_hex("kernel-size", handoff.kernel_size);
         serial_key_hex("kernel-entry-phys", handoff.kernel_entry_phys);
+        serial_key_hex("kernel-entry-virt", handoff.kernel_entry_virt);
         serial_key_hex("boot-args", handoff.boot_args_phys);
         serial_key_hex("memory-map", handoff.memory_map_phys);
         serial_key_hex("physical-memory-size", handoff.physical_memory_size);
-#if defined(__aarch64__)
+#if defined(__x86_64__)
+        serial_key_hex("bootstrap-pml4", handoff.identity_pagetable_phys);
+        serial_key_hex("jump-stack-phys", handoff.jump_stack_phys);
+#elif defined(__aarch64__)
         serial_key_hex("top-kernel-data", handoff.top_of_kernel_data);
         serial_key_hex("identity-pagetable", handoff.identity_pagetable_phys);
 #endif
