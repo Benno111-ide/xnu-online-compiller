@@ -1883,33 +1883,78 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
         hhdm->offset + handoff->boot_args_phys;
 
     __asm__ volatile (
-        "cli\n"
-        "cld\n"
-        "mov %0, %%cr3\n"
-        "mov $0x58, %%al\n"
-        "outb %%al, $0x3f8\n"
-        "mov %1, %%rax\n"
-        "mov (%%rax), %%rax\n"
-        "mov $0x59, %%al\n"
-        "outb %%al, $0x3f8\n"
-        "mov %2, %%rsp\n"
-        "xor %%rbp, %%rbp\n"
-        "mov $0x5a, %%al\n"
-        "outb %%al, $0x3f8\n"
-        "mov %3, %%rdi\n"
-        "xor %%rsi, %%rsi\n"
-        "xor %%rdx, %%rdx\n"
-        "xor %%rcx, %%rcx\n"
-        "xor %%r8, %%r8\n"
-        "xor %%r9, %%r9\n"
-        "jmp *%4\n"
-        :
-        : "r"(new_cr3),
-          "r"(boot_args_hhdm),
-          "r"(stack_top),
-          "r"(boot_args),
-          "r"(entry)
-        : "rax", "rdi", "rsi", "rdx", "rcx", "r8", "r9", "memory"
+    "cli\n"
+    "cld\n"
+
+    /*
+     * COM1 serial port.
+     */
+    "mov $0x3f8, %%dx\n"
+
+    /*
+     * Switch to our XNU bootstrap page tables.
+     */
+    "mov %0, %%cr3\n"
+
+    /*
+     * X = survived CR3 switch.
+     */
+    "mov $0x58, %%al\n"
+    "outb %%al, %%dx\n"
+
+    /*
+     * Touch boot_args through HHDM.
+     */
+    "mov %1, %%rax\n"
+    "mov (%%rax), %%rax\n"
+
+    /*
+     * Y = HHDM still works.
+     */
+    "mov $0x59, %%al\n"
+    "outb %%al, %%dx\n"
+
+    /*
+     * Switch to our transition stack.
+     */
+    "mov %2, %%rsp\n"
+    "xor %%rbp, %%rbp\n"
+
+    /*
+     * Z = stack transition worked.
+     */
+    "mov $0x5a, %%al\n"
+    "outb %%al, %%dx\n"
+
+    /*
+     * Pass XNU boot_args.
+     */
+    "mov %3, %%rdi\n"
+
+    "xor %%rsi, %%rsi\n"
+    "xor %%rdx, %%rdx\n"
+    "xor %%rcx, %%rcx\n"
+    "xor %%r8, %%r8\n"
+    "xor %%r9, %%r9\n"
+
+    /*
+     * Enter XNU.
+     */
+    "jmp *%4\n"
+    :
+    : "r"(new_cr3),
+      "r"(boot_args_hhdm),
+      "r"(stack_top),
+      "r"(boot_args),
+      "r"(entry)
+    : "rax",
+      "rdx",
+      "rdi",
+      "rsi",
+      "rcx",
+      "r8",
+      "r9",
+      "memory"
     );
 
     __builtin_unreachable();
