@@ -7,7 +7,7 @@ XNU_KERNEL_ARTIFACT ?=
 ifneq ($(wildcard build/prebuilt/xnu-kernel.macho),)
 XNU_KERNEL_ARTIFACT ?= build/prebuilt/xnu-kernel.macho
 endif
-XNU_HANDOFF_JUMP ?= 0
+XNU_HANDOFF_JUMP ?= 1
 XNU_HANDOFF_DEBUG ?= 0
 QEMU_MENU_WAIT ?= 14
 QEMU_BOOT_DUMPS ?= 1
