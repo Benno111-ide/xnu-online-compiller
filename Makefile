@@ -13,6 +13,8 @@ QEMU_MENU_WAIT ?= 14
 QEMU_BOOT_DUMPS ?= 1
 QEMU_BOOT_DUMP_INTERVAL ?= 5
 QEMU_HANDOFF_BOOT_DUMPS ?= 3
+ISO_PATH ?= $(ISO)
+QEMU_RUN_SECONDS ?= 60
 
 BUILD_DEPS_DIR := build/xnu-build-deps
 BUILD_DIR := build/$(ARCH)
@@ -44,7 +46,7 @@ else
 ISO_PREREQS := build-xnu build-bootstub $(XNU_STAMP) limine.conf
 endif
 
-.PHONY: all fetch-xnu verify-xnu fetch-limine install-build-deps build-xnu build-bootstub iso verify smoke-boot smoke-boot-capture handoff-boot clean
+.PHONY: all fetch-xnu verify-xnu fetch-limine install-build-deps build-xnu build-bootstub iso verify smoke-boot smoke-boot-capture virtualize-iso handoff-boot clean
 
 all: build-xnu iso verify
 
@@ -187,6 +189,10 @@ smoke-boot-capture:
 	test -s "$(ISO)"
 	test -s "$(ISO_ROOT)/EFI/efiboot.img"
 	QEMU_ALLOW_ANY_BOOT=1 QEMU_MENU_WAIT="$(QEMU_MENU_WAIT)" QEMU_BOOT_WAIT="$(QEMU_BOOT_WAIT)" QEMU_BOOT_DUMPS="$(QEMU_BOOT_DUMPS)" QEMU_BOOT_DUMP_INTERVAL="$(QEMU_BOOT_DUMP_INTERVAL)" sh scripts/smoke-boot-limine.sh "$(ARCH)" "$(ISO_ROOT)/EFI/efiboot.img" "$(BUILD_DIR)/limine-smoke"
+
+virtualize-iso:
+	test -s "$(ISO_PATH)"
+	QEMU_RUN_SECONDS="$(QEMU_RUN_SECONDS)" sh scripts/virtualize-iso-capture.sh "$(ARCH)" "$(ISO_PATH)" "$(BUILD_DIR)/iso-virtualize"
 
 handoff-boot:
 	test "$(ARCH)" = "arm64"

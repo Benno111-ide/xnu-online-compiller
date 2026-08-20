@@ -1436,6 +1436,70 @@ static int load_macho_segments(struct boot_allocator *allocator,
     return 1;
 }
 
+#if defined(__x86_64__)
+static int load_macho_segments_x86_fixed(const struct macho_preflight *macho,
+                                         uint64_t *kernel_phys,
+                                         uint64_t *kernel_size,
+                                         uint64_t *entry_phys) {
+    if (macho->vm_min == UINT64_MAX || macho->vm_max <= macho->vm_min ||
+        macho->vm_min < X86_XNU_STATIC_BASE) {
+        return 0;
+    }
+
+    struct limine_hhdm_response *hhdm = hhdm_request.response;
+    if (hhdm == 0) {
+        return 0;
+    }
+
+    uint64_t load_phys = macho->vm_min - X86_XNU_STATIC_BASE;
+    uint64_t load_size = align_up(macho->vm_max - macho->vm_min, 0x1000);
+    if (load_size == 0 || load_size > 512ULL * 1024ULL * 1024ULL ||
+        load_phys < 0x100000 || load_phys + load_size > 0xffffffffULL) {
+        return 0;
+    }
+
+    uint8_t *load_base = (uint8_t *)(uintptr_t)(hhdm->offset + load_phys);
+    memzero(load_base, load_size);
+
+    const uint8_t *image = macho->image;
+    const struct mach_header_64 *header =
+        (const struct mach_header_64 *)(image + macho->slice_offset);
+    uint64_t cursor = macho->slice_offset + sizeof(*header);
+    uint64_t translated_entry = 0;
+
+    for (uint32_t i = 0; i < header->ncmds; i++) {
+        const struct load_command *lc = (const struct load_command *)(image + cursor);
+        if (lc->cmd == LC_SEGMENT_64 && lc->cmdsize >= sizeof(struct segment_command_64)) {
+            const struct segment_command_64 *seg = (const struct segment_command_64 *)lc;
+            if (seg->filesize != 0) {
+                if (seg->vmaddr < macho->vm_min || seg->vmaddr + seg->filesize > macho->vm_max) {
+                    return 0;
+                }
+                if (!range_ok(macho->slice_offset + seg->fileoff, macho->size, seg->filesize)) {
+                    return 0;
+                }
+                uint64_t dest_off = seg->vmaddr - macho->vm_min;
+                memcopy(load_base + dest_off, image + macho->slice_offset + seg->fileoff, seg->filesize);
+            }
+
+            if (macho->entry >= seg->vmaddr && macho->entry < seg->vmaddr + seg->vmsize) {
+                translated_entry = load_phys + (macho->entry - macho->vm_min);
+            }
+        }
+        cursor += lc->cmdsize;
+    }
+
+    if (translated_entry == 0) {
+        return 0;
+    }
+
+    *kernel_phys = load_phys;
+    *kernel_size = load_size;
+    *entry_phys = translated_entry;
+    return 1;
+}
+#endif
+
 static uint32_t xnu_efi_type_from_limine(uint64_t type) {
     switch (type) {
         case LIMINE_MEMMAP_USABLE:
@@ -1718,13 +1782,32 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
     handoff->allocator_base = allocator.base;
     debug_stage(2, 255, 255, 255);
 
-    if (!load_macho_segments(&allocator, macho,
-                             &handoff->kernel_phys,
-                             &handoff->kernel_size,
-                             &handoff->kernel_entry_phys)) {
+    int load_ok = 0;
+#if defined(__x86_64__)
+    load_ok = load_macho_segments_x86_fixed(macho,
+                                            &handoff->kernel_phys,
+                                            &handoff->kernel_size,
+                                            &handoff->kernel_entry_phys);
+#else
+    load_ok = load_macho_segments(&allocator, macho,
+                                  &handoff->kernel_phys,
+                                  &handoff->kernel_size,
+                                  &handoff->kernel_entry_phys);
+#endif
+    if (!load_ok) {
         handoff->status = 5;
         return 0;
     }
+#if defined(__x86_64__)
+    if (allocator.cursor < handoff->kernel_phys + handoff->kernel_size &&
+        allocator.base + allocator.size > handoff->kernel_phys) {
+        allocator.cursor = align_up(handoff->kernel_phys + handoff->kernel_size, 0x1000);
+        if (allocator.cursor > allocator.base + allocator.size) {
+            handoff->status = 5;
+            return 0;
+        }
+    }
+#endif
     debug_stage(3, 255, 255, 255);
 
     uint64_t memory_map_phys = 0;
@@ -1928,7 +2011,7 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
     args->mem_size = handoff->physical_memory_size;
     args->mem_size_actual = handoff->physical_memory_size;
     args->top_of_kernel_data = align_up(allocator.cursor, 0x4000);
-    args->device_tree_p = (void *)(uintptr_t)(args->virt_base + device_tree_phys - args->phys_base);
+    args->device_tree_p = (void *)(uintptr_t)device_tree_phys;
     args->device_tree_length = device_tree_size;
     strcopy_bounded(args->command_line, sizeof(args->command_line), "-v keepsyms=1");
     if (fb != 0) {
@@ -2064,6 +2147,7 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     uint64_t new_cr3 = handoff->identity_pagetable_phys;
     uint64_t entry = handoff->kernel_entry_virt;
     uint64_t boot_args = handoff->boot_args_phys;
+    uint32_t boot_args32 = (uint32_t)boot_args;
     uint64_t stack_top =
         hhdm->offset + handoff->jump_stack_phys +
         handoff->jump_stack_size - 16;
@@ -2135,7 +2219,8 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     /*
      * Pass XNU boot_args.
      */
-    "mov %3, %%rdi\n"
+    "mov %3, %%eax\n"
+    "mov %3, %%edi\n"
 
     "xor %%rsi, %%rsi\n"
     "xor %%rdx, %%rdx\n"
@@ -2151,7 +2236,7 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     : "r"(new_cr3),
       "r"(boot_args_hhdm),
       "r"(stack_top),
-      "r"(boot_args),
+      "r"(boot_args32),
       "r"(entry)
     : "rax",
       "rdx",
@@ -2186,8 +2271,8 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     serial_key_hex("jump-ttbr0", identity_ttbr0);
     serial_write("os8-handoff: jumping\n");
     flush_range_to_poc((void *)(uintptr_t)(hhdm->offset + handoff->kernel_phys), handoff->kernel_size);
-    flush_range_to_poc(handoff->boot_args, 0x1000);
-    flush_range_to_poc((void *)(uintptr_t)(hhdm->offset + handoff->identity_pagetable_phys), 0x2000);
+    flush_range_to_poc((void *)(uintptr_t)(hhdm->offset + handoff->allocator_base),
+                       handoff->allocator_used);
 
     __asm__ volatile (
         "dsb ish\n"
