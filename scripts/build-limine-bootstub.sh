@@ -1972,11 +1972,10 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
         return 0;
     }
 
-    void *entry = (void *)(uintptr_t)(hhdm->offset + handoff->kernel_entry_phys);
+    uint64_t entry_phys = handoff->kernel_entry_phys;
     uint64_t boot_args_phys = handoff->boot_args_phys;
     uint64_t identity_ttbr0 = handoff->identity_pagetable_phys;
     serial_key_hex("jump-entry-phys", handoff->kernel_entry_phys);
-    serial_key_hex("jump-entry-virt", (uint64_t)(uintptr_t)entry);
     serial_key_hex("jump-boot-args", boot_args_phys);
     serial_key_hex("jump-ttbr0", identity_ttbr0);
     serial_write("os8-handoff: jumping\n");
@@ -1999,7 +1998,7 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
         "mov x3, xzr\n"
         "br %1\n"
         :
-        : "r"(boot_args_phys), "r"(entry), "r"(identity_ttbr0)
+        : "r"(boot_args_phys), "r"(entry_phys), "r"(identity_ttbr0)
         : "x0", "x1", "x2", "x3", "x20", "x21", "memory");
     __builtin_unreachable();
 #else
