@@ -1015,8 +1015,11 @@ static int build_arm64_identity_map(struct boot_allocator *allocator, uint64_t *
 #define X86_PAGE_PRESENT 0x001ULL
 #define X86_PAGE_WRITE   0x002ULL
 #define X86_PAGE_PS      0x080ULL
+#define X86_PAGE_NX      0x8000000000000000ULL
 #define X86_PAGE_TABLE_FLAGS (X86_PAGE_PRESENT | X86_PAGE_WRITE)
 #define X86_LARGE_PAGE_FLAGS (X86_PAGE_PRESENT | X86_PAGE_WRITE | X86_PAGE_PS)
+#define X86_PAGE_FLAGS (X86_PAGE_PRESENT | X86_PAGE_WRITE)
+#define X86_PT_MASK 0x000ffffffffff000ULL
 #define X86_2M   0x00200000ULL
 #define X86_1G   0x40000000ULL
 #define X86_512G 0x8000000000ULL
@@ -1060,6 +1063,87 @@ static int map_x86_2m_page(struct boot_allocator *allocator,
 
     pd[pd_index] =
         (physical_address & 0x000fffffffe00000ULL) | X86_LARGE_PAGE_FLAGS;
+    return 1;
+}
+
+static int map_x86_4k_page(struct boot_allocator *allocator,
+                           uint64_t *pml4,
+                           uint64_t hhdm_offset,
+                           uint64_t virtual_address,
+                           uint64_t physical_address) {
+    uint64_t pml4_index = (virtual_address >> 39) & 0x1ff;
+    uint64_t pdpt_index = (virtual_address >> 30) & 0x1ff;
+    uint64_t pd_index = (virtual_address >> 21) & 0x1ff;
+    uint64_t pt_index = (virtual_address >> 12) & 0x1ff;
+
+    uint64_t pdpt_phys = pml4[pml4_index] & X86_PT_MASK;
+    uint64_t *pdpt = 0;
+    if (pdpt_phys == 0) {
+        pdpt = (uint64_t *)boot_alloc(allocator, 0x1000, 0x1000, &pdpt_phys);
+        if (pdpt == 0) {
+            return 0;
+        }
+        memzero(pdpt, 0x1000);
+        pml4[pml4_index] = pdpt_phys | X86_PAGE_TABLE_FLAGS;
+    } else {
+        pdpt = (uint64_t *)(uintptr_t)(hhdm_offset + pdpt_phys);
+    }
+
+    uint64_t pd_phys = pdpt[pdpt_index] & X86_PT_MASK;
+    uint64_t *pd = 0;
+    if (pd_phys == 0) {
+        pd = (uint64_t *)boot_alloc(allocator, 0x1000, 0x1000, &pd_phys);
+        if (pd == 0) {
+            return 0;
+        }
+        memzero(pd, 0x1000);
+        pdpt[pdpt_index] = pd_phys | X86_PAGE_TABLE_FLAGS;
+    } else {
+        pd = (uint64_t *)(uintptr_t)(hhdm_offset + pd_phys);
+    }
+
+    if ((pd[pd_index] & X86_PAGE_PS) != 0) {
+        serial_write("os8-handoff: x86 4k map hit large page\n");
+        return 0;
+    }
+
+    uint64_t pt_phys = pd[pd_index] & X86_PT_MASK;
+    uint64_t *pt = 0;
+    if (pt_phys == 0) {
+        pt = (uint64_t *)boot_alloc(allocator, 0x1000, 0x1000, &pt_phys);
+        if (pt == 0) {
+            return 0;
+        }
+        memzero(pt, 0x1000);
+        pd[pd_index] = pt_phys | X86_PAGE_TABLE_FLAGS;
+    } else {
+        pt = (uint64_t *)(uintptr_t)(hhdm_offset + pt_phys);
+    }
+
+    pt[pt_index] = (physical_address & X86_PT_MASK) | X86_PAGE_FLAGS;
+    return 1;
+}
+
+static int map_x86_4k_range(struct boot_allocator *allocator,
+                            uint64_t *pml4,
+                            uint64_t hhdm_offset,
+                            uint64_t virtual_base,
+                            uint64_t physical_base,
+                            uint64_t size) {
+    uint64_t virtual_start = align_down(virtual_base, 0x1000);
+    uint64_t virtual_delta = virtual_base - virtual_start;
+    uint64_t physical_start = physical_base - virtual_delta;
+    uint64_t mapped_size = align_up(size + virtual_delta, 0x1000);
+
+    for (uint64_t offset = 0; offset < mapped_size; offset += 0x1000) {
+        if (!map_x86_4k_page(allocator,
+                             pml4,
+                             hhdm_offset,
+                             virtual_start + offset,
+                             physical_start + offset)) {
+            return 0;
+        }
+    }
     return 1;
 }
 
@@ -1172,23 +1256,23 @@ static int build_x86_bootstrap_map(
 
     if (executable_virtual_base != 0 &&
         executable_physical_base != 0 &&
-        !map_x86_2m_range(allocator,
-                          pml4,
-                          hhdm_offset,
-                          executable_virtual_base,
-                          executable_physical_base,
-                          X86_2M)) {
+        !map_x86_4k_range(allocator,
+                           pml4,
+                           hhdm_offset,
+                           executable_virtual_base,
+                           executable_physical_base,
+                           X86_2M)) {
         return 0;
     }
 
     if (transition_virtual_address != 0 &&
         transition_physical_address != 0 &&
-        !map_x86_2m_range(allocator,
-                          pml4,
-                          hhdm_offset,
-                          transition_virtual_address,
-                          transition_physical_address,
-                          X86_2M)) {
+        !map_x86_4k_range(allocator,
+                           pml4,
+                           hhdm_offset,
+                           transition_virtual_address,
+                           transition_physical_address,
+                           X86_2M)) {
         return 0;
     }
 
@@ -2113,6 +2197,20 @@ static void configure_framebuffer_handoff(struct limine_framebuffer *fb,
     serial_key_hex("fb-bpp", fb->bpp);
 }
 
+#if defined(__x86_64__)
+struct x86_gdtr {
+    uint16_t limit;
+    uint64_t base;
+} __attribute__((packed));
+
+static uint64_t x86_transition_gdt[] __attribute__((aligned(16))) = {
+    0x0000000000000000ULL,
+    0x00cf9a000000ffffULL,
+    0x00cf92000000ffffULL,
+    0x00af9a000000ffffULL,
+};
+#endif
+
 static int try_jump_xnu(const struct xnu_handoff *handoff) {
 #if XNU_HANDOFF_JUMP && defined(__x86_64__)
     if (handoff->status != 0) {
@@ -2151,6 +2249,28 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     uint64_t stack_top =
         hhdm->offset + handoff->jump_stack_phys +
         handoff->jump_stack_size - 16;
+    uint32_t entry32 = (uint32_t)handoff->kernel_entry_phys;
+    uint32_t stack_top32 =
+        (uint32_t)(handoff->jump_stack_phys + handoff->jump_stack_size - 16);
+    uint32_t compat_trampoline32 = (uint32_t)handoff->jump_stack_phys;
+    struct x86_gdtr transition_gdtr = {
+        (uint16_t)(sizeof(x86_transition_gdt) - 1),
+        (uint64_t)(uintptr_t)x86_transition_gdt
+    };
+    static const uint8_t compat_trampoline[] = {
+        0x66, 0xba, 0x10, 0x00,
+        0x8e, 0xda,
+        0x8e, 0xc2,
+        0x8e, 0xd2,
+        0x89, 0xcc,
+        0x31, 0xed,
+        0x31, 0xc9,
+        0x31, 0xd2,
+        0xff, 0xe3
+    };
+    memcopy((void *)(uintptr_t)(hhdm->offset + handoff->jump_stack_phys),
+            compat_trampoline,
+            sizeof(compat_trampoline));
 
     serial_key_hex("jump-entry-phys", handoff->kernel_entry_phys);
     serial_key_hex("jump-entry-virt", entry);
@@ -2166,12 +2286,8 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     /*
      * Diagnostic transition:
      * X = survived CR3 switch
-     * Y = HHDM access succeeded
      * Z = new stack installed
      */
-    uint64_t boot_args_hhdm =
-        hhdm->offset + handoff->boot_args_phys;
-
     __asm__ volatile (
     "cli\n"
     "cld\n"
@@ -2193,21 +2309,14 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     "outb %%al, %%dx\n"
 
     /*
-     * Touch boot_args through HHDM.
+     * Install a known GDT before changing the C stack/base pointer.
      */
-    "mov %1, %%rax\n"
-    "mov (%%rax), %%rax\n"
-
-    /*
-     * Y = HHDM still works.
-     */
-    "mov $0x59, %%al\n"
-    "outb %%al, %%dx\n"
+    "lgdt %5\n"
 
     /*
      * Switch to our transition stack.
      */
-    "mov %2, %%rsp\n"
+    "mov %1, %%rsp\n"
     "xor %%rbp, %%rbp\n"
 
     /*
@@ -2217,34 +2326,37 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     "outb %%al, %%dx\n"
 
     /*
-     * Pass XNU boot_args.
+     * Enter XNU through the 32-bit protected-mode trampoline it expects.
      */
-    "mov %3, %%eax\n"
-    "mov %3, %%edi\n"
-
-    "xor %%rsi, %%rsi\n"
-    "xor %%rdx, %%rdx\n"
-    "xor %%rcx, %%rcx\n"
-    "xor %%r8, %%r8\n"
-    "xor %%r9, %%r9\n"
-
-    /*
-     * Enter XNU.
-     */
-    "jmp *%4\n"
+    "pushq $0x18\n"
+    "leaq 1f(%%rip), %%rax\n"
+    "pushq %%rax\n"
+    "lretq\n"
+    "1:\n"
+    "mov $0x10, %%ax\n"
+    "mov %%ax, %%ds\n"
+    "mov %%ax, %%es\n"
+    "mov %%ax, %%ss\n"
+    "mov %2, %%eax\n"
+    "mov %3, %%ebx\n"
+    "mov %4, %%ecx\n"
+    "mov %6, %%esi\n"
+    "pushq $0x08\n"
+    "pushq %%rsi\n"
+    "lretq\n"
     :
     : "r"(new_cr3),
-      "r"(boot_args_hhdm),
       "r"(stack_top),
       "r"(boot_args32),
-      "r"(entry)
+      "r"(entry32),
+      "r"(stack_top32),
+      "m"(transition_gdtr),
+      "r"(compat_trampoline32)
     : "rax",
+      "rbx",
       "rdx",
-      "rdi",
       "rsi",
       "rcx",
-      "r8",
-      "r9",
       "memory"
     );
 
