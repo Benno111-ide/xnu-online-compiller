@@ -878,6 +878,11 @@ struct xnu_handoff {
     uint64_t allocator_base;
     uint64_t allocator_used;
     uint64_t physical_memory_size;
+    uint64_t memory_map_descriptor_size;
+    uint64_t efi_runtime_services_page_start;
+    uint64_t efi_runtime_services_page_count;
+    uint64_t efi_runtime_services_virtual_page_start;
+    uint64_t efi_system_table_phys;
     uint64_t kernel_phys;
     uint64_t kernel_size;
     uint64_t kernel_entry_phys;
@@ -887,6 +892,8 @@ struct xnu_handoff {
     uint64_t jump_stack_size;
     uint32_t status;
 };
+
+static int try_jump_xnu(const struct xnu_handoff *handoff);
 
 struct apple_dt_node {
     uint32_t n_properties;
@@ -1013,6 +1020,8 @@ static int build_arm64_identity_map(struct boot_allocator *allocator, uint64_t *
 #define X86_2M   0x00200000ULL
 #define X86_1G   0x40000000ULL
 #define X86_512G 0x8000000000ULL
+#define X86_XNU_STATIC_BASE 0xffffff8000000000ULL
+#define X86_EFI_MEMORY_RUNTIME 0x8000000000000000ULL
 
 static int map_x86_2m_page(struct boot_allocator *allocator,
                            uint64_t *pml4,
@@ -1082,9 +1091,12 @@ static int build_x86_bootstrap_map(
     uint64_t hhdm_offset,
     uint64_t executable_virtual_base,
     uint64_t executable_physical_base,
+    uint64_t transition_virtual_address,
+    uint64_t transition_physical_address,
     uint64_t kernel_virtual_base,
     uint64_t kernel_physical_base,
     uint64_t kernel_size,
+    uint64_t static_map_size,
     uint64_t max_phys,
     uint64_t *pml4_phys_out
 ) {
@@ -1153,6 +1165,11 @@ static int build_x86_bootstrap_map(
     pml4[hhdm_slot] =
         (pdpt_phys & 0x000ffffffffff000ULL) | X86_PAGE_TABLE_FLAGS;
 
+    serial_key_hex("x86-exec-virt", executable_virtual_base);
+    serial_key_hex("x86-exec-phys", executable_physical_base);
+    serial_key_hex("x86-transition-virt", transition_virtual_address);
+    serial_key_hex("x86-transition-phys", transition_physical_address);
+
     if (executable_virtual_base != 0 &&
         executable_physical_base != 0 &&
         !map_x86_2m_range(allocator,
@@ -1160,6 +1177,17 @@ static int build_x86_bootstrap_map(
                           hhdm_offset,
                           executable_virtual_base,
                           executable_physical_base,
+                          X86_2M)) {
+        return 0;
+    }
+
+    if (transition_virtual_address != 0 &&
+        transition_physical_address != 0 &&
+        !map_x86_2m_range(allocator,
+                          pml4,
+                          hhdm_offset,
+                          transition_virtual_address,
+                          transition_physical_address,
                           X86_2M)) {
         return 0;
     }
@@ -1173,6 +1201,16 @@ static int build_x86_bootstrap_map(
                           kernel_virtual_base,
                           kernel_physical_base,
                           kernel_size)) {
+        return 0;
+    }
+
+    if (static_map_size != 0 &&
+        !map_x86_2m_range(allocator,
+                          pml4,
+                          hhdm_offset,
+                          X86_XNU_STATIC_BASE,
+                          0,
+                          static_map_size)) {
         return 0;
     }
 
@@ -1420,6 +1458,73 @@ static uint32_t xnu_efi_type_from_limine(uint64_t type) {
     }
 }
 
+#if defined(__x86_64__)
+static void normalize_x86_runtime_descriptors(void *memory_map,
+                                              uint64_t memory_map_size,
+                                              uint64_t descriptor_size) {
+    if (memory_map == 0 || descriptor_size < sizeof(struct xnu_efi_memory_range)) {
+        return;
+    }
+
+    uint8_t *cursor = (uint8_t *)memory_map;
+    uint64_t count = memory_map_size / descriptor_size;
+    for (uint64_t i = 0; i < count; i++) {
+        struct xnu_efi_memory_range *range =
+            (struct xnu_efi_memory_range *)(cursor + i * descriptor_size);
+        if ((range->attribute & X86_EFI_MEMORY_RUNTIME) != 0 &&
+            range->virtual_start == 0) {
+            range->virtual_start = X86_XNU_STATIC_BASE | range->physical_start;
+        }
+    }
+}
+
+static void compute_x86_runtime_range(const void *memory_map,
+                                      uint64_t memory_map_size,
+                                      uint64_t descriptor_size,
+                                      uint32_t *page_start_out,
+                                      uint32_t *page_count_out,
+                                      uint64_t *virtual_start_out) {
+    uint64_t first_page = UINT64_MAX;
+    uint64_t end_page = 0;
+    uint64_t first_virtual = 0;
+
+    if (memory_map != 0 && descriptor_size >= sizeof(struct xnu_efi_memory_range)) {
+        const uint8_t *cursor = (const uint8_t *)memory_map;
+        uint64_t count = memory_map_size / descriptor_size;
+        for (uint64_t i = 0; i < count; i++) {
+            const struct xnu_efi_memory_range *range =
+                (const struct xnu_efi_memory_range *)(cursor + i * descriptor_size);
+            if ((range->attribute & X86_EFI_MEMORY_RUNTIME) == 0 ||
+                range->number_of_pages == 0) {
+                continue;
+            }
+
+            uint64_t page_start = range->physical_start >> 12;
+            uint64_t page_end = page_start + range->number_of_pages;
+            if (page_start < first_page) {
+                first_page = page_start;
+                first_virtual = range->virtual_start;
+            }
+            if (page_end > end_page) {
+                end_page = page_end;
+            }
+        }
+    }
+
+    if (first_page == UINT64_MAX || end_page <= first_page ||
+        first_page > UINT32_MAX || end_page - first_page > UINT32_MAX) {
+        *page_start_out = 0;
+        *page_count_out = 0;
+        *virtual_start_out = 0;
+        return;
+    }
+
+    *page_start_out = (uint32_t)first_page;
+    *page_count_out = (uint32_t)(end_page - first_page);
+    *virtual_start_out = first_virtual;
+}
+#endif
+
 static uint64_t physical_memory_size_from_memmap(void) {
     struct limine_memmap_response *memmap = memmap_request.response;
     if (memmap == 0) {
@@ -1580,7 +1685,20 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
         return 0;
     }
 
+    struct limine_efi_memmap_response *efi_memmap = efi_memmap_request.response;
     uint64_t memory_map_size = memmap->entry_count * sizeof(struct xnu_efi_memory_range);
+    uint64_t memory_map_descriptor_size = sizeof(struct xnu_efi_memory_range);
+    int use_efi_memory_map = 0;
+#if defined(__x86_64__)
+    if (efi_memmap != 0 &&
+        efi_memmap->memmap != 0 &&
+        efi_memmap->memmap_size != 0 &&
+        efi_memmap->desc_size >= sizeof(struct xnu_efi_memory_range)) {
+        memory_map_size = efi_memmap->memmap_size;
+        memory_map_descriptor_size = efi_memmap->desc_size;
+        use_efi_memory_map = 1;
+    }
+#endif
     uint64_t kernel_load_size = 0;
     if (macho->vm_min != UINT64_MAX && macho->vm_max > macho->vm_min) {
         kernel_load_size = align_up(macho->vm_max - macho->vm_min, 0x1000);
@@ -1620,14 +1738,24 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
     handoff->kernel_entry_virt = macho->entry;
     debug_stage(4, 255, 255, 255);
 
-    for (uint64_t i = 0; i < memmap->entry_count; i++) {
-        struct limine_memmap_entry *entry = memmap->entries[i];
-        memory_map[i].type = entry != 0 ? xnu_efi_type_from_limine(entry->type) : 0;
-        memory_map[i].physical_start = entry != 0 ? entry->base : 0;
-        memory_map[i].virtual_start = 0;
-        memory_map[i].number_of_pages = entry != 0 ? entry->length / 0x1000 : 0;
-        memory_map[i].attribute = 0;
+    if (use_efi_memory_map) {
+        memcopy(memory_map, efi_memmap->memmap, memory_map_size);
+#if defined(__x86_64__)
+        normalize_x86_runtime_descriptors(memory_map, memory_map_size, memory_map_descriptor_size);
+#endif
+    } else {
+        for (uint64_t i = 0; i < memmap->entry_count; i++) {
+            struct limine_memmap_entry *entry = memmap->entries[i];
+            memory_map[i].type = entry != 0 ? xnu_efi_type_from_limine(entry->type) : 0;
+            memory_map[i].physical_start = entry != 0 ? entry->base : 0;
+            memory_map[i].virtual_start = 0;
+            memory_map[i].number_of_pages = entry != 0 ? entry->length / 0x1000 : 0;
+            memory_map[i].attribute = 0;
+        }
     }
+#if !defined(__x86_64__)
+    (void)memory_map_descriptor_size;
+#endif
     debug_stage(5, 255, 255, 255);
 
     uint64_t boot_args_phys = 0;
@@ -1659,6 +1787,15 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
         executable_physical_base =
             executable_address_request.response->physical_base;
     }
+    uint64_t transition_virtual_address = (uint64_t)(uintptr_t)&try_jump_xnu;
+    uint64_t transition_physical_address = 0;
+    if (executable_virtual_base != 0 &&
+        executable_physical_base != 0 &&
+        transition_virtual_address >= executable_virtual_base) {
+        transition_physical_address =
+            executable_physical_base +
+            (transition_virtual_address - executable_virtual_base);
+    }
 
     uint64_t x86_map_end = handoff->physical_memory_size;
 
@@ -1688,9 +1825,12 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
             hhdm->offset,
             executable_virtual_base,
             executable_physical_base,
+            transition_virtual_address,
+            transition_physical_address,
             macho->vm_min,
             handoff->kernel_phys,
             handoff->kernel_size,
+            x86_map_end,
             x86_map_end,
             &handoff->identity_pagetable_phys)) {
         handoff->status = 11;
@@ -1722,10 +1862,20 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
     strcopy_bounded(args->command_line, sizeof(args->command_line), "-v keepsyms=1");
     args->memory_map = (uint32_t)memory_map_phys;
     args->memory_map_size = (uint32_t)memory_map_size;
-    args->memory_map_descriptor_size = sizeof(struct xnu_efi_memory_range);
-    if (efi_memmap_request.response != 0) {
-        args->memory_map_descriptor_version = (uint32_t)efi_memmap_request.response->desc_version;
+    args->memory_map_descriptor_size = (uint32_t)memory_map_descriptor_size;
+    if (efi_memmap != 0) {
+        args->memory_map_descriptor_version = (uint32_t)efi_memmap->desc_version;
     }
+    compute_x86_runtime_range(memory_map,
+                              memory_map_size,
+                              memory_map_descriptor_size,
+                              &args->efi_runtime_services_page_start,
+                              &args->efi_runtime_services_page_count,
+                              &args->efi_runtime_services_virtual_page_start);
+    handoff->memory_map_descriptor_size = args->memory_map_descriptor_size;
+    handoff->efi_runtime_services_page_start = args->efi_runtime_services_page_start;
+    handoff->efi_runtime_services_page_count = args->efi_runtime_services_page_count;
+    handoff->efi_runtime_services_virtual_page_start = args->efi_runtime_services_virtual_page_start;
     args->device_tree_p = (uint32_t)device_tree_phys;
     args->device_tree_length = device_tree_size;
     args->kaddr = (uint32_t)handoff->kernel_phys;
@@ -1735,6 +1885,7 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
     args->physical_memory_size = handoff->physical_memory_size;
     if (efi_system_table_request.response != 0) {
         args->efi_system_table = (uint32_t)virt_to_phys(efi_system_table_request.response->address);
+        handoff->efi_system_table_phys = args->efi_system_table;
     }
     if (fb != 0) {
         uint64_t fb_phys = 0;
@@ -2097,7 +2248,8 @@ void _start(void) {
         }
         debug_stage(1, xnu != 0 ? 0 : 255, xnu != 0 ? 255 : 80, 255);
         debug_stage(2, 255, 0, 255);
-        struct macho_preflight macho = {0};
+        struct macho_preflight macho;
+        memzero(&macho, sizeof(macho));
         debug_stage(3, 255, 0, 255);
         int macho_ok = xnu != 0 && parse_macho(xnu, &macho);
         serial_key_hex("macho-status", macho.status);
@@ -2107,7 +2259,8 @@ void _start(void) {
         serial_key_hex("macho-vm-min", macho.vm_min == UINT64_MAX ? 0 : macho.vm_min);
         serial_key_hex("macho-vm-max", macho.vm_max);
         debug_stage(4, macho_ok ? 0 : 255, macho_ok ? 255 : 80, 255);
-        struct xnu_handoff handoff = {0};
+        struct xnu_handoff handoff;
+        memzero(&handoff, sizeof(handoff));
         int handoff_ok = build_xnu_handoff(&handoff, xnu, &macho, fb);
         serial_key_hex("handoff-status", handoff.status);
         serial_key_hex("kernel-load", handoff.kernel_phys);
@@ -2118,6 +2271,11 @@ void _start(void) {
         serial_key_hex("memory-map", handoff.memory_map_phys);
         serial_key_hex("physical-memory-size", handoff.physical_memory_size);
 #if defined(__x86_64__)
+        serial_key_hex("memory-map-desc-size", handoff.memory_map_descriptor_size);
+        serial_key_hex("efi-runtime-page-start", handoff.efi_runtime_services_page_start);
+        serial_key_hex("efi-runtime-page-count", handoff.efi_runtime_services_page_count);
+        serial_key_hex("efi-runtime-virt-start", handoff.efi_runtime_services_virtual_page_start);
+        serial_key_hex("efi-system-table", handoff.efi_system_table_phys);
         serial_key_hex("bootstrap-pml4", handoff.identity_pagetable_phys);
         serial_key_hex("jump-stack-phys", handoff.jump_stack_phys);
 #elif defined(__aarch64__)
