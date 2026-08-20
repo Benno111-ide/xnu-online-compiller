@@ -1014,11 +1014,77 @@ static int build_arm64_identity_map(struct boot_allocator *allocator, uint64_t *
 #define X86_1G   0x40000000ULL
 #define X86_512G 0x8000000000ULL
 
+static int map_x86_2m_page(struct boot_allocator *allocator,
+                           uint64_t *pml4,
+                           uint64_t hhdm_offset,
+                           uint64_t virtual_address,
+                           uint64_t physical_address) {
+    uint64_t pml4_index = (virtual_address >> 39) & 0x1ff;
+    uint64_t pdpt_index = (virtual_address >> 30) & 0x1ff;
+    uint64_t pd_index = (virtual_address >> 21) & 0x1ff;
+
+    uint64_t pdpt_phys = pml4[pml4_index] & 0x000ffffffffff000ULL;
+    uint64_t *pdpt = 0;
+    if (pdpt_phys == 0) {
+        pdpt = (uint64_t *)boot_alloc(allocator, 0x1000, 0x1000, &pdpt_phys);
+        if (pdpt == 0) {
+            return 0;
+        }
+        memzero(pdpt, 0x1000);
+        pml4[pml4_index] = pdpt_phys | X86_PAGE_TABLE_FLAGS;
+    } else {
+        pdpt = (uint64_t *)(uintptr_t)(hhdm_offset + pdpt_phys);
+    }
+
+    uint64_t pd_phys = pdpt[pdpt_index] & 0x000ffffffffff000ULL;
+    uint64_t *pd = 0;
+    if (pd_phys == 0) {
+        pd = (uint64_t *)boot_alloc(allocator, 0x1000, 0x1000, &pd_phys);
+        if (pd == 0) {
+            return 0;
+        }
+        memzero(pd, 0x1000);
+        pdpt[pdpt_index] = pd_phys | X86_PAGE_TABLE_FLAGS;
+    } else {
+        pd = (uint64_t *)(uintptr_t)(hhdm_offset + pd_phys);
+    }
+
+    pd[pd_index] =
+        (physical_address & 0x000fffffffe00000ULL) | X86_LARGE_PAGE_FLAGS;
+    return 1;
+}
+
+static int map_x86_2m_range(struct boot_allocator *allocator,
+                            uint64_t *pml4,
+                            uint64_t hhdm_offset,
+                            uint64_t virtual_base,
+                            uint64_t physical_base,
+                            uint64_t size) {
+    uint64_t virtual_start = align_down(virtual_base, X86_2M);
+    uint64_t physical_start = align_down(physical_base, X86_2M);
+    uint64_t virtual_delta = virtual_base - virtual_start;
+    uint64_t mapped_size = align_up(size + virtual_delta, X86_2M);
+
+    for (uint64_t offset = 0; offset < mapped_size; offset += X86_2M) {
+        if (!map_x86_2m_page(allocator,
+                             pml4,
+                             hhdm_offset,
+                             virtual_start + offset,
+                             physical_start + offset)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int build_x86_bootstrap_map(
     struct boot_allocator *allocator,
     uint64_t hhdm_offset,
     uint64_t executable_virtual_base,
     uint64_t executable_physical_base,
+    uint64_t kernel_virtual_base,
+    uint64_t kernel_physical_base,
+    uint64_t kernel_size,
     uint64_t max_phys,
     uint64_t *pml4_phys_out
 ) {
@@ -1088,40 +1154,26 @@ static int build_x86_bootstrap_map(
         (pdpt_phys & 0x000ffffffffff000ULL) | X86_PAGE_TABLE_FLAGS;
 
     if (executable_virtual_base != 0 &&
-        executable_physical_base != 0) {
-        uint64_t exec_va = align_down(executable_virtual_base, X86_2M);
-        uint64_t exec_pa = align_down(executable_physical_base, X86_2M);
-        uint64_t pml4_index = (exec_va >> 39) & 0x1ff;
-        uint64_t pdpt_index = (exec_va >> 30) & 0x1ff;
-        uint64_t pd_index = (exec_va >> 21) & 0x1ff;
+        executable_physical_base != 0 &&
+        !map_x86_2m_range(allocator,
+                          pml4,
+                          hhdm_offset,
+                          executable_virtual_base,
+                          executable_physical_base,
+                          X86_2M)) {
+        return 0;
+    }
 
-        if (pml4_index == 0 || pml4_index == 511) {
-            uint64_t existing_pd_phys =
-                pdpt[pdpt_index] & 0x000ffffffffff000ULL;
-            uint64_t *pd = 0;
-
-            if (existing_pd_phys == 0) {
-                uint64_t new_pd_phys = 0;
-                pd = (uint64_t *)boot_alloc(
-                    allocator, 0x1000, 0x1000, &new_pd_phys);
-                if (pd == 0) {
-                    return 0;
-                }
-                memzero(pd, 0x1000);
-                pdpt[pdpt_index] =
-                    new_pd_phys | X86_PAGE_TABLE_FLAGS;
-            } else {
-                struct limine_hhdm_response *hhdm = hhdm_request.response;
-                if (hhdm == 0) {
-                    return 0;
-                }
-                pd = (uint64_t *)(uintptr_t)(
-                    hhdm->offset + existing_pd_phys);
-            }
-
-            pd[pd_index] =
-                (exec_pa & 0x000fffffffe00000ULL) | X86_LARGE_PAGE_FLAGS;
-        }
+    if (kernel_virtual_base != 0 &&
+        kernel_physical_base != 0 &&
+        kernel_size != 0 &&
+        !map_x86_2m_range(allocator,
+                          pml4,
+                          hhdm_offset,
+                          kernel_virtual_base,
+                          kernel_physical_base,
+                          kernel_size)) {
+        return 0;
     }
 
     *pml4_phys_out = pml4_phys;
@@ -1636,6 +1688,9 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
             hhdm->offset,
             executable_virtual_base,
             executable_physical_base,
+            macho->vm_min,
+            handoff->kernel_phys,
+            handoff->kernel_size,
             x86_map_end,
             &handoff->identity_pagetable_phys)) {
         handoff->status = 11;
