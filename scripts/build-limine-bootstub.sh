@@ -401,6 +401,16 @@ static void serial_write(const char *s) {
     }
 }
 
+static void serial_write_com1_only(const char *s) {
+    while (*s != '\0') {
+        if (*s == '\n') {
+            serial_putc('\r');
+        }
+        serial_putc(*s);
+        s++;
+    }
+}
+
 static void serial_hex64(uint64_t value) {
     static const char hexdigits[] = "0123456789abcdef";
     serial_write("0x");
@@ -600,8 +610,6 @@ static void draw_verbose_console(struct limine_framebuffer *fb, const char *stat
     draw_text(fb, x, y, "COM1 DIAGNOSTICS ENABLED", 2, gray);
     y += 28;
     draw_text(fb, x, y, status, 2, white);
-    y += 28;
-    draw_text(fb, x, y, "IF THE SCREEN STOPS HERE CHECK COM1 FOR THE NEXT MARKER", 2, gray);
     y += 36;
     draw_boot_log(fb, x, y, dim);
     flush_framebuffer(fb);
@@ -2289,13 +2297,17 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     uint64_t stack_top =
         hhdm->offset + handoff->jump_stack_phys +
         handoff->jump_stack_size - 16;
+    uint64_t stack_top_phys = handoff->jump_stack_phys + handoff->jump_stack_size - 16;
     uint32_t entry32 = (uint32_t)handoff->kernel_entry_phys;
-    uint32_t stack_top32 =
-        (uint32_t)(handoff->jump_stack_phys + handoff->jump_stack_size - 16);
-    uint32_t compat_trampoline32 = (uint32_t)handoff->jump_stack_phys;
+    uint32_t stack_top32 = (uint32_t)stack_top_phys;
+    uint64_t low_stack_virt = hhdm->offset + handoff->jump_stack_phys;
+    uint64_t gdt_phys = align_up(handoff->jump_stack_phys + 0x100, 16);
+    uint64_t gdtr_phys = align_up(gdt_phys + sizeof(x86_transition_gdt), 16);
+    uint64_t compat_trampoline_phys = align_up(gdtr_phys + sizeof(struct x86_gdtr), 16);
+    uint32_t compat_trampoline32 = (uint32_t)compat_trampoline_phys;
     struct x86_gdtr transition_gdtr = {
         (uint16_t)(sizeof(x86_transition_gdt) - 1),
-        (uint64_t)(uintptr_t)x86_transition_gdt
+        gdt_phys
     };
     static const uint8_t compat_trampoline[] = {
         0x66, 0xba, 0xf8, 0x03,
@@ -2311,7 +2323,13 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
         0x31, 0xd2,
         0xff, 0xe3
     };
-    memcopy((void *)(uintptr_t)(hhdm->offset + handoff->jump_stack_phys),
+    memcopy((void *)(uintptr_t)(low_stack_virt + (gdt_phys - handoff->jump_stack_phys)),
+            x86_transition_gdt,
+            sizeof(x86_transition_gdt));
+    memcopy((void *)(uintptr_t)(low_stack_virt + (gdtr_phys - handoff->jump_stack_phys)),
+            &transition_gdtr,
+            sizeof(transition_gdtr));
+    memcopy((void *)(uintptr_t)(low_stack_virt + (compat_trampoline_phys - handoff->jump_stack_phys)),
             compat_trampoline,
             sizeof(compat_trampoline));
 
@@ -2320,6 +2338,10 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     serial_key_hex("jump-boot-args", boot_args);
     serial_key_hex("jump-cr3", new_cr3);
     serial_key_hex("jump-stack", stack_top);
+    serial_key_hex("jump-stack-phys", stack_top_phys);
+    serial_key_hex("jump-gdt-phys", gdt_phys);
+    serial_key_hex("jump-gdtr-phys", gdtr_phys);
+    serial_key_hex("jump-trampoline-phys", compat_trampoline_phys);
 
     uint64_t old_cr3;
     __asm__ volatile ("mov %%cr3, %0" : "=r"(old_cr3));
@@ -2358,7 +2380,7 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     /*
      * Install a known GDT before changing the C stack/base pointer.
      */
-    "lgdt %5\n"
+    "lgdt (%%rdi)\n"
     "mov $0x47, %%al\n"
     "outb %%al, %%dx\n"
 
@@ -2400,11 +2422,11 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     "lretq\n"
     :
     : "r"(new_cr3),
-      "r"(stack_top),
+      "r"(stack_top_phys),
       "r"(boot_args32),
       "r"(entry32),
       "r"(stack_top32),
-      "m"(transition_gdtr),
+      "D"(gdtr_phys),
       "r"(compat_trampoline32)
     : "rax",
       "rbx",
@@ -2529,7 +2551,10 @@ void _start(void) {
         serial_key_hex("top-kernel-data", handoff.top_of_kernel_data);
         serial_key_hex("identity-pagetable", handoff.identity_pagetable_phys);
 #endif
-        draw_verbose_console(fb, handoff_ok ? "JUMPING TO XNU" : "HANDOFF FAILED - SEE COM1");
+        if (!handoff_ok) {
+            serial_write_com1_only("os8-handoff: warning: handoff failed before jump\n");
+        }
+        draw_verbose_console(fb, handoff_ok ? "JUMPING TO XNU" : "HANDOFF FAILED");
         if (handoff_ok) {
             int jumped = try_jump_xnu(&handoff);
             int retry = 0;
@@ -2546,7 +2571,8 @@ void _start(void) {
             }
         }
 
-        draw_verbose_console(fb, "JUMP FAILED - SEE COM1 DIAGNOSTICS");
+        serial_write_com1_only("os8-handoff: warning: jump failed, diagnostics are on COM1\n");
+        draw_verbose_console(fb, "JUMP FAILED");
     }
 
     halt_forever();
