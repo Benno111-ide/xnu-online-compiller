@@ -2328,6 +2328,17 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
         0x0f, 0x22, 0xc0,
         0xb0, 0x4e,
         0xee,
+        0x51,
+        0x52,
+        0xb9, 0x80, 0x00, 0x00, 0xc0,
+        0x0f, 0x32,
+        0x25, 0xff, 0xf6, 0xff, 0xff,
+        0x0f, 0x30,
+        0x5a,
+        0x59,
+        0x66, 0xba, 0xf8, 0x03,
+        0xb0, 0x52,
+        0xee,
         0x58,
         0x31, 0xc9,
         0x31, 0xd2,
@@ -2368,6 +2379,7 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
      * C = compatibility trampoline reached
      * S = compatibility stack and segments installed
      * N = paging disabled for XNU's 32-bit bootstrap
+     * R = EFER long-mode enable/NXE cleared for XNU bootstrap
      */
     __asm__ volatile (
     "cli\n"
