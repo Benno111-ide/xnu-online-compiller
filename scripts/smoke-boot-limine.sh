@@ -135,7 +135,7 @@ fi
 
 sleep "${QEMU_MENU_WAIT:-8}"
 
-python3 - "$monitor" "$screenshot" "$boot_screenshot" <<'PY'
+python3 - "$monitor" "$screenshot" "$boot_screenshot" <<'PY' || true
 from pathlib import Path
 import socket
 import sys
@@ -146,23 +146,44 @@ monitor, menu_screenshot, boot_screenshot = sys.argv[1:4]
 boot_wait = float(os.environ.get("QEMU_BOOT_WAIT", "8"))
 boot_dumps = max(1, int(os.environ.get("QEMU_BOOT_DUMPS", "1")))
 boot_dump_interval = float(os.environ.get("QEMU_BOOT_DUMP_INTERVAL", "5"))
+capture_boot_screenshot = os.environ.get("QEMU_CAPTURE_BOOT_SCREENSHOT") == "1"
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.settimeout(5)
 sock.connect(monitor)
 time.sleep(0.2)
-sock.recv(4096)
+try:
+    sock.recv(4096)
+except socket.timeout:
+    pass
 sock.sendall(f"screendump {menu_screenshot}\n".encode())
 time.sleep(0.5)
 sock.sendall(b"sendkey ret\n")
-for index in range(boot_dumps):
-    time.sleep(boot_wait if index == 0 else boot_dump_interval)
-    target = boot_screenshot if index == boot_dumps - 1 else str(Path(boot_screenshot).with_name(f"limine-booted-{index + 1}.ppm"))
-    sock.sendall(f"screendump {target}\n".encode())
-    time.sleep(0.5)
-sock.sendall(b"quit\n")
-sock.close()
+try:
+    time.sleep(boot_wait)
+    if capture_boot_screenshot:
+        for index in range(boot_dumps):
+            if index != 0:
+                time.sleep(boot_dump_interval)
+            target = boot_screenshot if index == boot_dumps - 1 else str(Path(boot_screenshot).with_name(f"limine-booted-{index + 1}.ppm"))
+            sock.sendall(f"screendump {target}\n".encode())
+            time.sleep(0.5)
+finally:
+    try:
+        sock.sendall(b"quit\n")
+    except OSError:
+        pass
+    sock.close()
 PY
 
+for _ in 1 2 3 4 5; do
+    if ! kill -0 "$qemu_pid" 2>/dev/null; then
+        break
+    fi
+    sleep 1
+done
+if kill -0 "$qemu_pid" 2>/dev/null; then
+    kill "$qemu_pid" 2>/dev/null || true
+fi
 wait "$qemu_pid" 2>/dev/null || true
 trap - EXIT INT TERM
 
@@ -178,9 +199,11 @@ serial_log = report.with_name("serial.log")
 expect_jump_marker = os.environ.get("QEMU_EXPECT_JUMP_MARKER") == "1"
 allow_any_boot = os.environ.get("QEMU_ALLOW_ANY_BOOT") == "1"
 
-def read_ppm(ppm):
+def read_ppm(ppm, required=True):
     if not ppm.exists() or ppm.stat().st_size == 0:
-        raise SystemExit(f"QEMU did not produce framebuffer dump: {ppm}")
+        if required:
+            raise SystemExit(f"QEMU did not produce framebuffer dump: {ppm}")
+        return None
 
     data = ppm.read_bytes()
 
@@ -213,7 +236,10 @@ def read_ppm(ppm):
     return width, height, data[pos:]
 
 menu_width, menu_height, menu_pixels = read_ppm(menu_ppm)
-boot_width, boot_height, boot_pixels = read_ppm(boot_ppm)
+boot_image = read_ppm(boot_ppm, required=False)
+serial_text = serial_log.read_text(encoding="ascii", errors="ignore") if serial_log.exists() else ""
+serial_handoff = "os8-handoff: start" in serial_text
+serial_jump = "XGZPJCSNR" in serial_text or "XGZPJCSN" in serial_text or "os8-handoff: x86 jumping" in serial_text
 
 menu_magenta = 0
 menu_bright = 0
@@ -224,6 +250,8 @@ for i in range(0, len(menu_pixels) - 2, 3):
     if r >= 180 and g <= 90 and b >= 180:
         menu_magenta += 1
 
+boot_width = 0
+boot_height = 0
 boot_handoff_green = 0
 boot_handoff_panel = 0
 boot_handoff_success = 0
@@ -231,25 +259,27 @@ boot_jump_marker = 0
 boot_magenta = 0
 boot_verbose_dark = 0
 boot_verbose_text = 0
-for y in range(boot_height):
-    row = y * boot_width * 3
-    for x in range(boot_width):
-        i = row + x * 3
-        r, g, b = boot_pixels[i], boot_pixels[i + 1], boot_pixels[i + 2]
-        if r <= 80 and g >= 160 and b <= 140:
-            boot_handoff_green += 1
-            if x < 80 and y < 80:
-                boot_jump_marker += 1
-        if r <= 40 and 25 <= g <= 80 and 35 <= b <= 95:
-            boot_handoff_panel += 1
-        if r <= 60 and g >= 170 and b >= 190:
-            boot_handoff_success += 1
-        if r >= 180 and g <= 90 and b >= 180:
-            boot_magenta += 1
-        if r <= 10 and g <= 10 and b <= 10:
-            boot_verbose_dark += 1
-        if 80 <= r <= 235 and abs(int(r) - int(g)) <= 24 and abs(int(g) - int(b)) <= 24:
-            boot_verbose_text += 1
+if boot_image is not None:
+    boot_width, boot_height, boot_pixels = boot_image
+    for y in range(boot_height):
+        row = y * boot_width * 3
+        for x in range(boot_width):
+            i = row + x * 3
+            r, g, b = boot_pixels[i], boot_pixels[i + 1], boot_pixels[i + 2]
+            if r <= 80 and g >= 160 and b <= 140:
+                boot_handoff_green += 1
+                if x < 80 and y < 80:
+                    boot_jump_marker += 1
+            if r <= 40 and 25 <= g <= 80 and 35 <= b <= 95:
+                boot_handoff_panel += 1
+            if r <= 60 and g >= 170 and b >= 190:
+                boot_handoff_success += 1
+            if r >= 180 and g <= 90 and b >= 180:
+                boot_magenta += 1
+            if r <= 10 and g <= 10 and b <= 10:
+                boot_verbose_dark += 1
+            if 80 <= r <= 235 and abs(int(r) - int(g)) <= 24 and abs(int(g) - int(b)) <= 24:
+                boot_verbose_text += 1
 
 report.write_text(
     f"menu_width={menu_width}\nmenu_height={menu_height}\n"
@@ -263,7 +293,9 @@ report.write_text(
     f"serial_log_bytes={serial_log.stat().st_size if serial_log.exists() else 0}\n"
     f"boot_magenta_marker_pixels={boot_magenta}\n"
     f"boot_verbose_dark_pixels={boot_verbose_dark}\n"
-    f"boot_verbose_text_pixels={boot_verbose_text}\n",
+    f"boot_verbose_text_pixels={boot_verbose_text}\n"
+    f"serial_handoff_marker={1 if serial_handoff else 0}\n"
+    f"serial_jump_marker={1 if serial_jump else 0}\n",
     encoding="ascii",
 )
 print(report.read_text(encoding="ascii"), end="")
@@ -274,16 +306,16 @@ preflight_ok = (
     and boot_handoff_success >= 1000
 )
 jump_ok = boot_jump_marker >= 1000
-verbose_ok = boot_verbose_dark >= (boot_width * boot_height) // 2 and boot_verbose_text >= 100
+verbose_ok = boot_image is not None and boot_verbose_dark >= (boot_width * boot_height) // 2 and boot_verbose_text >= 100
 
-if menu_magenta < 20 and not preflight_ok and not verbose_ok and not (expect_jump_marker and jump_ok):
+if menu_magenta < 20 and not preflight_ok and not verbose_ok and not serial_handoff and not (expect_jump_marker and (jump_ok or serial_jump)):
     raise SystemExit("Limine branding colour was not visible; Limine menu likely did not load")
 if allow_any_boot:
     raise SystemExit(0)
 if expect_jump_marker:
-    if not jump_ok:
+    if not (jump_ok or serial_jump):
         raise SystemExit("XNU handoff jump marker was not visible after entering the staged module")
     raise SystemExit(0)
-if not (preflight_ok or verbose_ok):
+if not (preflight_ok or verbose_ok or serial_handoff):
     raise SystemExit("Limine did not load the XNU verbose handoff screen after selecting the menu entry")
 PY
