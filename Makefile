@@ -7,7 +7,6 @@ XNU_KERNEL_ARTIFACT ?=
 ifneq ($(wildcard build/prebuilt/xnu-kernel.macho),)
 XNU_KERNEL_ARTIFACT ?= build/prebuilt/xnu-kernel.macho
 endif
-XNU_HANDOFF_JUMP ?= 1
 XNU_HANDOFF_DEBUG ?= 0
 QEMU_MENU_WAIT ?= 14
 QEMU_BOOT_DUMPS ?= 1
@@ -32,10 +31,12 @@ ifeq ($(ARCH),amd64)
 XNU_ARCH := X86_64
 EFI_BOOT_NAME := BOOTX64.EFI
 QEMU_BOOT_WAIT ?= 18
+XNU_HANDOFF_JUMP ?= 1
 else ifeq ($(ARCH),arm64)
 XNU_ARCH := ARM64
 EFI_BOOT_NAME := BOOTAA64.EFI
 QEMU_BOOT_WAIT ?= 34
+XNU_HANDOFF_JUMP ?= 1
 else
 $(error Unsupported ARCH '$(ARCH)'; use amd64 or arm64)
 endif

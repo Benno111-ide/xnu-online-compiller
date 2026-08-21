@@ -20,8 +20,13 @@ lld_prefix=$(brew --prefix lld 2>/dev/null || true)
 clang="${CLANG:-${llvm_prefix:+$llvm_prefix/bin/clang}}"
 ld_lld="${LD_LLD:-${lld_prefix:+$lld_prefix/bin/ld.lld}}"
 
-# Enable the real ARM64 XNU handoff unless explicitly disabled.
-handoff_jump="${XNU_HANDOFF_JUMP:-1}"
+if [ -n "${XNU_HANDOFF_JUMP+x}" ]; then
+    handoff_jump=$XNU_HANDOFF_JUMP
+elif [ "$arch" = "arm64" ]; then
+    handoff_jump=1
+else
+    handoff_jump=0
+fi
 handoff_debug="${XNU_HANDOFF_DEBUG:-0}"
 
 if [ -z "$clang" ] || [ ! -x "$clang" ]; then

@@ -14,7 +14,13 @@ llvm_prefix=$(brew --prefix llvm 2>/dev/null || true)
 lld_prefix=$(brew --prefix lld 2>/dev/null || true)
 clang="${CLANG:-${llvm_prefix:+$llvm_prefix/bin/clang}}"
 ld_lld="${LD_LLD:-${lld_prefix:+$lld_prefix/bin/ld.lld}}"
-handoff_jump="${XNU_HANDOFF_JUMP:-1}"
+if [ -n "${XNU_HANDOFF_JUMP+x}" ]; then
+    handoff_jump=$XNU_HANDOFF_JUMP
+elif [ "$arch" = "arm64" ]; then
+    handoff_jump=1
+else
+    handoff_jump=1
+fi
 handoff_debug="${XNU_HANDOFF_DEBUG:-0}"
 
 if [ -z "$clang" ] || [ ! -x "$clang" ]; then
@@ -2554,10 +2560,16 @@ void _start(void) {
         draw_key_hex(fb, x, y, "HANDOFF STAT", handoff.status, muted, handoff_ok ? marker : warn);
         y += 38;
 
-#if defined(__x86_64__)
+#if XNU_HANDOFF_JUMP && defined(__x86_64__)
         draw_text(fb, x, y, "X86-64 XNU JUMP ENABLED: CHECK SERIAL X/Y/Z", 2, warn);
+#elif defined(__x86_64__)
+        draw_text(fb, x, y, "X86-64 JUMP DISABLED: DIAGNOSTIC HANDOFF ONLY", 2, marker);
 #elif defined(__aarch64__)
+#if XNU_HANDOFF_JUMP
         draw_text(fb, x, y, "ARM64 JUMP READY: PHYS BOOTARGS + TTBR0 IDMAP", 2, marker);
+#else
+        draw_text(fb, x, y, "ARM64 JUMP DISABLED: DIAGNOSTIC HANDOFF ONLY", 2, marker);
+#endif
 #else
         draw_text(fb, x, y, "UNSUPPORTED ARCH BRIDGE", 2, warn);
 #endif
