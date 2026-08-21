@@ -2,11 +2,6 @@ ARCH ?= amd64
 XNU_SOURCE_DIR ?= build/xnu-source
 XNU_KERNEL_ARTIFACT ?=
 
-# If a local prebuilt kernel exists, use it by default for local builds.
-# Place a prebuilt Mach-O at `build/prebuilt/xnu-kernel.macho` to opt-in.
-ifneq ($(wildcard build/prebuilt/xnu-kernel.macho),)
-XNU_KERNEL_ARTIFACT ?= build/prebuilt/xnu-kernel.macho
-endif
 XNU_HANDOFF_DEBUG ?= 0
 QEMU_MENU_WAIT ?= 14
 QEMU_BOOT_DUMPS ?= 1
@@ -31,12 +26,10 @@ ifeq ($(ARCH),amd64)
 XNU_ARCH := X86_64
 EFI_BOOT_NAME := BOOTX64.EFI
 QEMU_BOOT_WAIT ?= 18
-XNU_HANDOFF_JUMP ?= 1
 else ifeq ($(ARCH),arm64)
 XNU_ARCH := ARM64
 EFI_BOOT_NAME := BOOTAA64.EFI
 QEMU_BOOT_WAIT ?= 34
-XNU_HANDOFF_JUMP ?= 1
 else
 $(error Unsupported ARCH '$(ARCH)'; use amd64 or arm64)
 endif
@@ -67,7 +60,7 @@ build-xnu: verify-xnu install-build-deps
 	sh scripts/build-xnu-kernel.sh "$(ARCH)" "$(XNU_SOURCE_DIR)" "$(XNU_BUILD_DIR)"
 
 build-bootstub: fetch-limine
-	XNU_HANDOFF_JUMP="$(XNU_HANDOFF_JUMP)" XNU_HANDOFF_DEBUG="$(XNU_HANDOFF_DEBUG)" sh scripts/build-limine-bootstub.sh "$(ARCH)" "$(BUILD_DIR)/bootstub" "$(BOOTSTUB)"
+	XNU_HANDOFF_DEBUG="$(XNU_HANDOFF_DEBUG)" sh scripts/build-limine-bootstub.sh "$(ARCH)" "$(BUILD_DIR)/bootstub" "$(BOOTSTUB)"
 
 iso: $(ISO)
 
@@ -198,7 +191,7 @@ virtualize-iso:
 handoff-boot:
 	test "$(ARCH)" = "arm64"
 	test -n "$(XNU_KERNEL_ARTIFACT)"
-	$(MAKE) ARCH="$(ARCH)" XNU_KERNEL_ARTIFACT="$(XNU_KERNEL_ARTIFACT)" XNU_HANDOFF_JUMP=1 XNU_HANDOFF_DEBUG="$(XNU_HANDOFF_DEBUG)" iso
+	$(MAKE) ARCH="$(ARCH)" XNU_KERNEL_ARTIFACT="$(XNU_KERNEL_ARTIFACT)" XNU_HANDOFF_DEBUG="$(XNU_HANDOFF_DEBUG)" iso
 	QEMU_ALLOW_ANY_BOOT=1 QEMU_MENU_WAIT="$(QEMU_MENU_WAIT)" QEMU_BOOT_WAIT="$(QEMU_BOOT_WAIT)" QEMU_BOOT_DUMPS="$(QEMU_HANDOFF_BOOT_DUMPS)" QEMU_BOOT_DUMP_INTERVAL="$(QEMU_BOOT_DUMP_INTERVAL)" sh scripts/smoke-boot-limine.sh "$(ARCH)" "$(ISO_ROOT)/EFI/efiboot.img" "$(BUILD_DIR)/limine-smoke"
 
 clean:

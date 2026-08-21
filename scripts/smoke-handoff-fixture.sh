@@ -42,13 +42,13 @@ mkdir -p "$root/EFI/BOOT" "$root/boot" "$root/boot/limine"
 
 sh scripts/build-limine-bootstub.sh "$arch" "$out/bootstub" "$bootstub"
 
-python3 - "$arch" "$macho" "${XNU_HANDOFF_JUMP:-0}" <<'PY'
+python3 - "$arch" "$macho" <<'PY'
 import os
 import struct
 import sys
 from pathlib import Path
 
-arch, out, handoff_jump = sys.argv[1:4]
+arch, out = sys.argv[1:3]
 if arch == "amd64":
     cputype = 0x01000007
     flavor = 4
@@ -72,7 +72,7 @@ vmaddr = 0x100000
 vmsize = 0x1000
 fileoff = 0x1000
 filesize = 0x100
-if arch == "arm64" and handoff_jump == "1":
+if arch == "arm64":
     filesize = 0x400
 entry = vmaddr
 
@@ -113,7 +113,7 @@ header = struct.pack(
 payload = bytearray(fileoff + filesize)
 payload[: len(header)] = header
 payload[len(header) : len(header) + len(cmds)] = cmds
-if arch == "arm64" and handoff_jump == "1":
+if arch == "arm64":
     words = []
     labels = {}
     fixups = []
@@ -307,4 +307,8 @@ mcopy -i "$image" "$root/limine.conf" "::/boot/limine/limine.conf"
 mcopy -i "$image" "$root/boot/bootloader.sys" "::/boot/bootloader.sys"
 mcopy -i "$image" "$root/boot/xnu-kernel.macho" "::/boot/xnu-kernel.macho"
 
-QEMU_MENU_WAIT="${QEMU_MENU_WAIT:-14}" QEMU_BOOT_WAIT="$qemu_boot_wait" QEMU_EXPECT_JUMP_MARKER="${XNU_HANDOFF_JUMP:-0}" sh scripts/smoke-boot-limine.sh "$arch" "$image" "$out/qemu"
+expect_jump_marker=0
+if [ "$arch" = "arm64" ]; then
+    expect_jump_marker=1
+fi
+QEMU_MENU_WAIT="${QEMU_MENU_WAIT:-14}" QEMU_BOOT_WAIT="$qemu_boot_wait" QEMU_EXPECT_JUMP_MARKER="$expect_jump_marker" sh scripts/smoke-boot-limine.sh "$arch" "$image" "$out/qemu"

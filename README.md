@@ -30,9 +30,8 @@ artifacts. The boot entry itself is a small Limine-compatible ELF stub because
 Limine's native protocol loader does not load Apple's raw Mach-O kernel artifact
 directly. When booted, that stub loads the XNU Mach-O module, stages its
 segments, builds XNU-style boot arguments, builds a minimal Apple device tree,
-and displays a diagnostic handoff screen. On `arm64`, `XNU_HANDOFF_JUMP=1`
-enables the experimental jump path, including a physical boot-args handoff and
-low `TTBR0_EL1` identity map.
+displays a diagnostic handoff screen, and jumps into XNU. On `arm64`, the
+jump includes a physical boot-args handoff and a low `TTBR0_EL1` identity map.
 
 Run the same build on an Ubuntu machine with:
 
@@ -50,9 +49,9 @@ capture an arm64 handoff attempt from this workspace with:
 make ARCH=arm64 XNU_KERNEL_ARTIFACT=/path/to/kernel.development handoff-boot
 ```
 
-That target rebuilds the arm64 stub with `XNU_HANDOFF_JUMP=1`, packages the
-external kernel as `/boot/xnu-kernel.macho`, boots QEMU, and writes the capture
-report under `build/arm64/limine-smoke/`.
+That target rebuilds the arm64 stub, packages the external kernel as
+`/boot/xnu-kernel.macho`, boots QEMU, and writes the capture report under
+`build/arm64/limine-smoke/`.
 
 Before packaging, `scripts/validate-xnu-macho.py` checks that the selected
 kernel artifact is a Mach-O/FAT Mach-O with the requested architecture slice,

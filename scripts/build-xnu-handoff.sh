@@ -20,13 +20,6 @@ lld_prefix=$(brew --prefix lld 2>/dev/null || true)
 clang="${CLANG:-${llvm_prefix:+$llvm_prefix/bin/clang}}"
 ld_lld="${LD_LLD:-${lld_prefix:+$lld_prefix/bin/ld.lld}}"
 
-if [ -n "${XNU_HANDOFF_JUMP+x}" ]; then
-    handoff_jump=$XNU_HANDOFF_JUMP
-elif [ "$arch" = "arm64" ]; then
-    handoff_jump=1
-else
-    handoff_jump=0
-fi
 handoff_debug="${XNU_HANDOFF_DEBUG:-0}"
 
 if [ -z "$clang" ] || [ ! -x "$clang" ]; then
@@ -75,7 +68,6 @@ esac
     -fno-pie \
     -fno-builtin \
     -O2 \
-    "-DXNU_HANDOFF_JUMP=$handoff_jump" \
     "-DXNU_HANDOFF_DEBUG=$handoff_debug" \
     $cflags \
     -Wall \

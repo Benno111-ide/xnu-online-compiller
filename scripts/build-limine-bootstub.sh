@@ -14,13 +14,6 @@ llvm_prefix=$(brew --prefix llvm 2>/dev/null || true)
 lld_prefix=$(brew --prefix lld 2>/dev/null || true)
 clang="${CLANG:-${llvm_prefix:+$llvm_prefix/bin/clang}}"
 ld_lld="${LD_LLD:-${lld_prefix:+$lld_prefix/bin/ld.lld}}"
-if [ -n "${XNU_HANDOFF_JUMP+x}" ]; then
-    handoff_jump=$XNU_HANDOFF_JUMP
-elif [ "$arch" = "arm64" ]; then
-    handoff_jump=1
-else
-    handoff_jump=1
-fi
 handoff_debug="${XNU_HANDOFF_DEBUG:-0}"
 
 if [ -z "$clang" ] || [ ! -x "$clang" ]; then
@@ -417,7 +410,7 @@ static void configure_framebuffer_handoff(struct limine_framebuffer *fb,
                                          uint64_t *fb_height_out,
                                          uint32_t *fb_bpp_out);
 
-#if XNU_HANDOFF_JUMP && defined(__aarch64__)
+#if defined(__aarch64__)
 static void flush_range_to_poc(const void *address, uint64_t size) {
     uint64_t ctr_el0;
     __asm__ volatile ("mrs %0, ctr_el0" : "=r"(ctr_el0));
@@ -2218,7 +2211,7 @@ static uint64_t x86_transition_gdt[] __attribute__((aligned(16))) = {
 #endif
 
 static int try_jump_xnu(const struct xnu_handoff *handoff) {
-#if XNU_HANDOFF_JUMP && defined(__x86_64__)
+#if defined(__x86_64__)
     if (handoff->status != 0) {
         serial_write("os8-handoff: x86 jump skipped bad handoff\n");
         return 0;
@@ -2368,7 +2361,7 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
 
     __builtin_unreachable();
 
-#elif XNU_HANDOFF_JUMP && defined(__aarch64__)
+#elif defined(__aarch64__)
     if (handoff->status != 0 || handoff->kernel_entry_phys == 0 ||
         handoff->boot_args == 0 || handoff->identity_pagetable_phys == 0) {
         serial_write("os8-handoff: jump skipped\n");
@@ -2560,16 +2553,10 @@ void _start(void) {
         draw_key_hex(fb, x, y, "HANDOFF STAT", handoff.status, muted, handoff_ok ? marker : warn);
         y += 38;
 
-#if XNU_HANDOFF_JUMP && defined(__x86_64__)
+#if defined(__x86_64__)
         draw_text(fb, x, y, "X86-64 XNU JUMP ENABLED: CHECK SERIAL X/Y/Z", 2, warn);
-#elif defined(__x86_64__)
-        draw_text(fb, x, y, "X86-64 JUMP DISABLED: DIAGNOSTIC HANDOFF ONLY", 2, marker);
 #elif defined(__aarch64__)
-#if XNU_HANDOFF_JUMP
         draw_text(fb, x, y, "ARM64 JUMP READY: PHYS BOOTARGS + TTBR0 IDMAP", 2, marker);
-#else
-        draw_text(fb, x, y, "ARM64 JUMP DISABLED: DIAGNOSTIC HANDOFF ONLY", 2, marker);
-#endif
 #else
         draw_text(fb, x, y, "UNSUPPORTED ARCH BRIDGE", 2, warn);
 #endif
@@ -2652,7 +2639,6 @@ esac
     -fno-pie \
     -fno-builtin \
     -O2 \
-    "-DXNU_HANDOFF_JUMP=$handoff_jump" \
     "-DXNU_HANDOFF_DEBUG=$handoff_debug" \
     $cflags \
     -Wall \
