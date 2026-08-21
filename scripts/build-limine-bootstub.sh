@@ -541,9 +541,31 @@ static void draw_boot_log(struct limine_framebuffer *fb,
     char line[96];
     uint64_t line_y = y;
     const char *cursor = boot_log_buffer;
+    uint64_t total_lines = 0;
     uint64_t line_index = 0;
+    uint64_t skip_lines = 0;
 
-    while (*cursor != '\0' && line_index < 10) {
+    while (*cursor != '\0') {
+        if (*cursor == '\n') {
+            total_lines++;
+        }
+        cursor++;
+    }
+    if (boot_log_len != 0 && boot_log_buffer[boot_log_len - 1] != '\n') {
+        total_lines++;
+    }
+    if (total_lines > 18) {
+        skip_lines = total_lines - 18;
+    }
+
+    cursor = boot_log_buffer;
+    while (*cursor != '\0' && skip_lines != 0) {
+        if (*cursor++ == '\n') {
+            skip_lines--;
+        }
+    }
+
+    while (*cursor != '\0' && line_index < 18) {
         uint64_t i = 0;
         while (*cursor != '\0' && *cursor != '\n' && i + 1 < sizeof(line)) {
             line[i++] = *cursor++;
@@ -578,6 +600,8 @@ static void draw_verbose_console(struct limine_framebuffer *fb, const char *stat
     draw_text(fb, x, y, "COM1 DIAGNOSTICS ENABLED", 2, gray);
     y += 28;
     draw_text(fb, x, y, status, 2, white);
+    y += 28;
+    draw_text(fb, x, y, "IF THE SCREEN STOPS HERE CHECK COM1 FOR THE NEXT MARKER", 2, gray);
     y += 36;
     draw_boot_log(fb, x, y, dim);
     flush_framebuffer(fb);
@@ -2274,6 +2298,9 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
         (uint64_t)(uintptr_t)x86_transition_gdt
     };
     static const uint8_t compat_trampoline[] = {
+        0x66, 0xba, 0xf8, 0x03,
+        0xb0, 0x43,
+        0xee,
         0x66, 0xba, 0x10, 0x00,
         0x8e, 0xda,
         0x8e, 0xc2,
@@ -2302,7 +2329,11 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     /*
      * Diagnostic transition:
      * X = survived CR3 switch
+     * G = GDT installed
      * Z = new stack installed
+     * P = reached long-mode transition label
+     * J = final far return into compatibility trampoline
+     * C = compatibility trampoline reached
      */
     __asm__ volatile (
     "cli\n"
@@ -2328,6 +2359,8 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
      * Install a known GDT before changing the C stack/base pointer.
      */
     "lgdt %5\n"
+    "mov $0x47, %%al\n"
+    "outb %%al, %%dx\n"
 
     /*
      * Switch to our transition stack.
@@ -2349,6 +2382,8 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     "pushq %%rax\n"
     "lretq\n"
     "1:\n"
+    "mov $0x50, %%al\n"
+    "outb %%al, %%dx\n"
     "mov $0x10, %%ax\n"
     "mov %%ax, %%ds\n"
     "mov %%ax, %%es\n"
@@ -2357,6 +2392,9 @@ static int try_jump_xnu(const struct xnu_handoff *handoff) {
     "mov %3, %%ebx\n"
     "mov %4, %%ecx\n"
     "mov %6, %%esi\n"
+    "mov $0x3f8, %%dx\n"
+    "mov $0x4a, %%al\n"
+    "outb %%al, %%dx\n"
     "pushq $0x08\n"
     "pushq %%rsi\n"
     "lretq\n"
