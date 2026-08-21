@@ -331,34 +331,20 @@ static void flush_framebuffer(const struct limine_framebuffer *fb) {
 }
 
 static struct limine_framebuffer *debug_fb;
+static void serial_key_hex(const char *key, uint64_t value);
 
-#if XNU_HANDOFF_DEBUG
 static void debug_stage(uint64_t stage, uint8_t r, uint8_t g, uint8_t b) {
-    if (debug_fb == 0) {
-        return;
-    }
-    fill_rect(debug_fb, 24 + stage * 24, 136, 18, 18, make_pixel(debug_fb, r, g, b));
-    flush_framebuffer(debug_fb);
-}
-#else
-static void debug_stage(uint64_t stage, uint8_t r, uint8_t g, uint8_t b) {
-    (void)stage;
     (void)r;
     (void)g;
     (void)b;
+    serial_key_hex("stage", stage);
 }
-#endif
 
 static char boot_log_buffer[8192];
 static uint64_t boot_log_len;
-
-static void boot_log_append(const char *s) {
-    while (*s != '\0' && boot_log_len + 1 < sizeof(boot_log_buffer)) {
-        boot_log_buffer[boot_log_len++] = *s;
-        s++;
-    }
-    boot_log_buffer[boot_log_len] = '\0';
-}
+#if defined(__x86_64__)
+static int serial_initialized;
+#endif
 
 static void boot_log_append_char(char c) {
     if (boot_log_len + 1 < sizeof(boot_log_buffer)) {
@@ -369,6 +355,34 @@ static void boot_log_append_char(char c) {
 
 static void serial_putc(char c) {
 #if defined(__x86_64__)
+    if (!serial_initialized) {
+        uint16_t port = 0x3f8;
+        uint8_t value;
+        value = 0x00;
+        __asm__ volatile ("outb %0, %1" :: "a"(value), "Nd"((uint16_t)(port + 1)));
+        value = 0x80;
+        __asm__ volatile ("outb %0, %1" :: "a"(value), "Nd"((uint16_t)(port + 3)));
+        value = 0x03;
+        __asm__ volatile ("outb %0, %1" :: "a"(value), "Nd"((uint16_t)(port + 0)));
+        value = 0x00;
+        __asm__ volatile ("outb %0, %1" :: "a"(value), "Nd"((uint16_t)(port + 1)));
+        value = 0x03;
+        __asm__ volatile ("outb %0, %1" :: "a"(value), "Nd"((uint16_t)(port + 3)));
+        value = 0xc7;
+        __asm__ volatile ("outb %0, %1" :: "a"(value), "Nd"((uint16_t)(port + 2)));
+        value = 0x0b;
+        __asm__ volatile ("outb %0, %1" :: "a"(value), "Nd"((uint16_t)(port + 4)));
+        serial_initialized = 1;
+    }
+
+    uint16_t status_port = 0x3fd;
+    for (uint32_t timeout = 0; timeout < 100000; timeout++) {
+        uint8_t status;
+        __asm__ volatile ("inb %1, %0" : "=a"(status) : "Nd"(status_port));
+        if ((status & 0x20) != 0) {
+            break;
+        }
+    }
     __asm__ volatile ("outb %0, %1" :: "a"((uint8_t)c), "Nd"((uint16_t)0x3f8));
 #else
     (void)c;
@@ -391,7 +405,9 @@ static void serial_hex64(uint64_t value) {
     static const char hexdigits[] = "0123456789abcdef";
     serial_write("0x");
     for (int i = 0; i < 16; i++) {
-        serial_putc(hexdigits[(value >> ((15 - i) * 4)) & 0xf]);
+        char c = hexdigits[(value >> ((15 - i) * 4)) & 0xf];
+        serial_putc(c);
+        boot_log_append_char(c);
     }
 }
 
@@ -544,6 +560,27 @@ static void draw_boot_log(struct limine_framebuffer *fb,
             cursor++;
         }
     }
+}
+
+static void draw_verbose_console(struct limine_framebuffer *fb, const char *status) {
+    uint32_t black = make_pixel(fb, 0, 0, 0);
+    uint32_t white = make_pixel(fb, 210, 210, 210);
+    uint32_t gray = make_pixel(fb, 150, 150, 150);
+    uint32_t dim = make_pixel(fb, 90, 90, 90);
+    uint64_t x = 24;
+    uint64_t y = 24;
+
+    fill_rect(fb, 0, 0, fb->width, fb->height, black);
+    draw_text(fb, x, y, "DARWIN/XNU VERBOSE BOOT", 2, white);
+    y += 28;
+    draw_text(fb, x, y, "BOOT-ARGS: -V KEEPSYMS=1 DEBUG=0X144 SERIAL=3", 2, gray);
+    y += 28;
+    draw_text(fb, x, y, "COM1 DIAGNOSTICS ENABLED", 2, gray);
+    y += 28;
+    draw_text(fb, x, y, status, 2, white);
+    y += 36;
+    draw_boot_log(fb, x, y, dim);
+    flush_framebuffer(fb);
 }
 
 static int streq(const char *a, const char *b) {
@@ -2025,7 +2062,7 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
     args->revision = XNU_BOOT_ARGS_REVISION_X86;
     args->version = XNU_BOOT_ARGS_VERSION;
     args->efi_mode = XNU_EFI_MODE_64;
-    strcopy_bounded(args->command_line, sizeof(args->command_line), "-v keepsyms=1");
+    strcopy_bounded(args->command_line, sizeof(args->command_line), "-v keepsyms=1 debug=0x144 serial=3");
     args->memory_map = (uint32_t)memory_map_phys;
     args->memory_map_size = (uint32_t)memory_map_size;
     args->memory_map_descriptor_size = (uint32_t)memory_map_descriptor_size;
@@ -2096,7 +2133,7 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
     args->top_of_kernel_data = align_up(allocator.cursor, 0x4000);
     args->device_tree_p = (void *)(uintptr_t)device_tree_phys;
     args->device_tree_length = device_tree_size;
-    strcopy_bounded(args->command_line, sizeof(args->command_line), "-v keepsyms=1");
+    strcopy_bounded(args->command_line, sizeof(args->command_line), "-v keepsyms=1 debug=0x144 serial=3");
     if (fb != 0) {
         uint64_t fb_phys = 0;
         uint64_t fb_pitch = 0;
@@ -2125,26 +2162,6 @@ static int build_xnu_handoff(struct xnu_handoff *handoff,
     handoff->status = 0;
     debug_stage(8, 0, 210, 255);
     return 1;
-}
-
-static void hex64(char *buf, uint64_t value) {
-    static const char hexdigits[] = "0123456789abcdef";
-    buf[0] = '0';
-    buf[1] = 'x';
-    for (int i = 0; i < 16; i++) {
-        buf[2 + i] = hexdigits[(value >> ((15 - i) * 4)) & 0xf];
-    }
-    buf[18] = '\0';
-}
-
-static void draw_key_hex(struct limine_framebuffer *fb,
-                         uint64_t x, uint64_t y,
-                         const char *key, uint64_t value,
-                         uint32_t key_colour, uint32_t value_colour) {
-    char buf[19];
-    hex64(buf, value);
-    draw_text(fb, x, y, key, 2, key_colour);
-    draw_text(fb, x + 210, y, buf, 2, value_colour);
 }
 
 static void configure_framebuffer_handoff(struct limine_framebuffer *fb,
@@ -2430,11 +2447,7 @@ void _start(void) {
         debug_fb = fb;
         serial_key_hex("framebuffer-width", fb->width);
         serial_key_hex("framebuffer-height", fb->height);
-        uint32_t early_background = make_pixel(fb, 4, 16, 28);
-        uint32_t early_marker = make_pixel(fb, 0, 210, 255);
-        fill_rect(fb, 0, 0, fb->width, fb->height, early_background);
-        fill_rect(fb, 24, 24, 96, 96, early_marker);
-        flush_framebuffer(fb);
+        draw_verbose_console(fb, "LOADING XNU MACH-O MODULE");
 
         debug_stage(0, 255, 0, 255);
         struct limine_file *xnu = find_xnu_module();
@@ -2478,6 +2491,7 @@ void _start(void) {
         serial_key_hex("top-kernel-data", handoff.top_of_kernel_data);
         serial_key_hex("identity-pagetable", handoff.identity_pagetable_phys);
 #endif
+        draw_verbose_console(fb, handoff_ok ? "JUMPING TO XNU" : "HANDOFF FAILED - SEE COM1");
         if (handoff_ok) {
             int jumped = try_jump_xnu(&handoff);
             int retry = 0;
@@ -2494,77 +2508,7 @@ void _start(void) {
             }
         }
 
-        uint32_t background = make_pixel(fb, 8, 18, 28);
-        uint32_t panel = make_pixel(fb, 14, 38, 48);
-        uint32_t marker = make_pixel(fb, 0, 255, 96);
-        uint32_t stripe = make_pixel(fb, 255, 0, 255);
-        uint32_t text = make_pixel(fb, 230, 246, 238);
-        uint32_t muted = make_pixel(fb, 156, 184, 176);
-        uint32_t warn = make_pixel(fb, 255, 190, 80);
-        uint32_t success = make_pixel(fb, 0, 210, 255);
-
-        fill_rect(fb, 0, 0, fb->width, fb->height, background);
-        fill_rect(fb, fb->width / 10, fb->height / 5, fb->width * 4 / 5, fb->height * 3 / 5, panel);
-        fill_rect(fb, fb->width / 10, fb->height / 5, fb->width * 4 / 5, 14, marker);
-        fill_rect(fb, fb->width / 10, fb->height / 5 + 22, fb->width * 4 / 5, 6, stripe);
-        fill_rect(fb, fb->width / 10 + fb->width * 4 / 5 - 96, fb->height / 5 + 42, 64, 64,
-                  handoff_ok ? success : warn);
-
-        uint64_t x = fb->width / 10 + 32;
-        uint64_t y = fb->height / 5 + 48;
-
-        draw_text(fb, x, y, "OS8 XNU HANDOFF", 4, text);
-        y += 60;
-        draw_text(fb, x, y, xnu != 0 ? "XNU MODULE LOADED" : "XNU MODULE MISSING", 3, xnu != 0 ? marker : warn);
-        y += 44;
-        draw_text(fb, x, y, macho_ok ? "MACH-O PREFLIGHT OK" : "MACH-O PREFLIGHT FAILED", 2, macho_ok ? marker : warn);
-        y += 34;
-        draw_text(fb, x, y, handoff_ok ? "XNU BOOT-ARGS BUILT" : "XNU BOOT-ARGS FAILED", 2, handoff_ok ? marker : warn);
-        y += 34;
-
-        if (xnu != 0) {
-            draw_key_hex(fb, x, y, "MODULE SIZE", xnu->size, muted, text);
-            y += 28;
-        }
-        draw_key_hex(fb, x, y, "STATUS", macho.status, muted, macho_ok ? marker : warn);
-        y += 28;
-        draw_key_hex(fb, x, y, "SLICE OFFSET", macho.slice_offset, muted, text);
-        y += 28;
-        draw_key_hex(fb, x, y, "ENTRY", macho.entry, muted, text);
-        y += 28;
-        draw_key_hex(fb, x, y, "VM MIN", macho.vm_min == UINT64_MAX ? 0 : macho.vm_min, muted, text);
-        y += 28;
-        draw_key_hex(fb, x, y, "VM MAX", macho.vm_max, muted, text);
-        y += 38;
-        draw_key_hex(fb, x, y, "BOOT ARGS", handoff.boot_args_phys, muted, handoff_ok ? marker : warn);
-        y += 28;
-        draw_key_hex(fb, x, y, "MEM MAP", handoff.memory_map_phys, muted, handoff_ok ? marker : warn);
-        y += 28;
-        draw_key_hex(fb, x, y, "KERNEL LOAD", handoff.kernel_phys, muted, handoff_ok ? marker : warn);
-        y += 28;
-        draw_key_hex(fb, x, y, "ENTRY PHYS", handoff.kernel_entry_phys, muted, handoff_ok ? marker : warn);
-        y += 28;
-#if defined(__aarch64__)
-        draw_key_hex(fb, x, y, "TOP KDATA", handoff.top_of_kernel_data, muted, handoff_ok ? marker : warn);
-        y += 28;
-        draw_key_hex(fb, x, y, "TTBR0 IDMAP", handoff.identity_pagetable_phys, muted, handoff_ok ? marker : warn);
-        y += 28;
-#endif
-        draw_key_hex(fb, x, y, "HANDOFF STAT", handoff.status, muted, handoff_ok ? marker : warn);
-        y += 38;
-
-#if defined(__x86_64__)
-        draw_text(fb, x, y, "X86-64 XNU JUMP ENABLED: CHECK SERIAL X/Y/Z", 2, warn);
-#elif defined(__aarch64__)
-        draw_text(fb, x, y, "ARM64 JUMP READY: PHYS BOOTARGS + TTBR0 IDMAP", 2, marker);
-#else
-        draw_text(fb, x, y, "UNSUPPORTED ARCH BRIDGE", 2, warn);
-#endif
-        y += 28;
-        draw_text(fb, x, y, "LOG", 2, text);
-        y += 24;
-        draw_boot_log(fb, x, y, muted);
-        flush_framebuffer(fb);
+        draw_verbose_console(fb, "JUMP FAILED - SEE COM1 DIAGNOSTICS");
     }
 
     halt_forever();

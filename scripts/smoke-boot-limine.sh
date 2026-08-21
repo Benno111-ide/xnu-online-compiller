@@ -229,6 +229,8 @@ boot_handoff_panel = 0
 boot_handoff_success = 0
 boot_jump_marker = 0
 boot_magenta = 0
+boot_verbose_dark = 0
+boot_verbose_text = 0
 for y in range(boot_height):
     row = y * boot_width * 3
     for x in range(boot_width):
@@ -244,6 +246,10 @@ for y in range(boot_height):
             boot_handoff_success += 1
         if r >= 180 and g <= 90 and b >= 180:
             boot_magenta += 1
+        if r <= 10 and g <= 10 and b <= 10:
+            boot_verbose_dark += 1
+        if 80 <= r <= 235 and abs(int(r) - int(g)) <= 24 and abs(int(g) - int(b)) <= 24:
+            boot_verbose_text += 1
 
 report.write_text(
     f"menu_width={menu_width}\nmenu_height={menu_height}\n"
@@ -255,7 +261,9 @@ report.write_text(
     f"boot_handoff_success_pixels={boot_handoff_success}\n"
     f"boot_jump_marker_pixels={boot_jump_marker}\n"
     f"serial_log_bytes={serial_log.stat().st_size if serial_log.exists() else 0}\n"
-    f"boot_magenta_marker_pixels={boot_magenta}\n",
+    f"boot_magenta_marker_pixels={boot_magenta}\n"
+    f"boot_verbose_dark_pixels={boot_verbose_dark}\n"
+    f"boot_verbose_text_pixels={boot_verbose_text}\n",
     encoding="ascii",
 )
 print(report.read_text(encoding="ascii"), end="")
@@ -266,8 +274,9 @@ preflight_ok = (
     and boot_handoff_success >= 1000
 )
 jump_ok = boot_jump_marker >= 1000
+verbose_ok = boot_verbose_dark >= (boot_width * boot_height) // 2 and boot_verbose_text >= 100
 
-if menu_magenta < 20 and not preflight_ok and not (expect_jump_marker and jump_ok):
+if menu_magenta < 20 and not preflight_ok and not verbose_ok and not (expect_jump_marker and jump_ok):
     raise SystemExit("Limine branding colour was not visible; Limine menu likely did not load")
 if allow_any_boot:
     raise SystemExit(0)
@@ -275,6 +284,6 @@ if expect_jump_marker:
     if not jump_ok:
         raise SystemExit("XNU handoff jump marker was not visible after entering the staged module")
     raise SystemExit(0)
-if not preflight_ok:
-    raise SystemExit("Limine did not load the XNU handoff preflight screen after selecting the menu entry")
+if not (preflight_ok or verbose_ok):
+    raise SystemExit("Limine did not load the XNU verbose handoff screen after selecting the menu entry")
 PY
