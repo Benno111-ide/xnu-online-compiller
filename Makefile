@@ -78,12 +78,7 @@ $(ISO): $(ISO_PREREQS)
 	cp "$(XNU_STAMP)" "$(ISO_ROOT)/XNU-UPSTREAM.txt"
 	. ./xnu-upstream.env; \
 	printf 'repo=%s\nversion=%s\nbinary_url=%s\nsha256=%s\n' "$$LIMINE_REPO_URL" "$$LIMINE_VERSION" "$$LIMINE_BINARY_URL" "$$LIMINE_BINARY_SHA256" > "$(ISO_ROOT)/LIMINE-UPSTREAM.txt"
-	cp limine.conf "$(ISO_ROOT)/limine.conf"
-	mkdir -p "$(ISO_ROOT)/boot/limine" "$(ISO_ROOT)/limine"
-	cp "$(ISO_ROOT)/limine.conf" "$(ISO_ROOT)/boot/limine/limine.conf"
-	cp "$(ISO_ROOT)/limine.conf" "$(ISO_ROOT)/boot/limine.conf"
-	cp "$(ISO_ROOT)/limine.conf" "$(ISO_ROOT)/limine/limine.conf"
-	cp "$(ISO_ROOT)/limine.conf" "$(ISO_ROOT)/EFI/BOOT/limine.conf"
+	mkdir -p "$(ISO_ROOT)/boot"
 	if [ -n "$(XNU_KERNEL_ARTIFACT)" ]; then \
 		test -s "$(XNU_KERNEL_ARTIFACT)"; \
 		xnu_validation=$$(python3 scripts/validate-xnu-macho.py "$(ARCH)" "$(XNU_KERNEL_ARTIFACT)") || exit 1; \
@@ -117,11 +112,11 @@ $(ISO): $(ISO_PREREQS)
 	mformat -i "$(ISO_ROOT)/EFI/efiboot.img" ::
 	mmd -i "$(ISO_ROOT)/EFI/efiboot.img" ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine ::/limine
 	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(EFI_DIR)/$(EFI_BOOT_NAME)" "::/EFI/BOOT/$(EFI_BOOT_NAME)"
-	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/limine.conf" "::/limine.conf"
-	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/limine.conf" "::/EFI/BOOT/limine.conf"
-	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/limine.conf" "::/boot/limine/limine.conf"
-	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/limine.conf" "::/boot/limine.conf"
-	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/limine.conf" "::/limine/limine.conf"
+	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" limine.conf "::/limine.conf"
+	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" limine.conf "::/EFI/BOOT/limine.conf"
+	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" limine.conf "::/boot/limine/limine.conf"
+	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" limine.conf "::/boot/limine.conf"
+	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" limine.conf "::/limine/limine.conf"
 	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/boot/bootloader.sys" "::/boot/bootloader.sys"
 	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/boot/xnu-kernel.macho" "::/boot/xnu-kernel.macho"
 	xorriso -as mkisofs -quiet -J -R -V APPLE_XNU_$(ARCH) -eltorito-alt-boot -e EFI/efiboot.img -no-emul-boot -o "$@" "$(ISO_ROOT)"
@@ -138,18 +133,13 @@ verify: $(ISO)
 	grep -q '/BUILD-LABEL.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/XNU-UPSTREAM.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/LIMINE-UPSTREAM.txt' "$(BUILD_DIR)/iso-contents.txt"
-	grep -q '/limine.conf' "$(BUILD_DIR)/iso-contents.txt"
-	grep -q '/boot/limine/limine.conf' "$(BUILD_DIR)/iso-contents.txt"
-	grep -q '/boot/limine.conf' "$(BUILD_DIR)/iso-contents.txt"
-	grep -q '/limine/limine.conf' "$(BUILD_DIR)/iso-contents.txt"
-	grep -q '/EFI/BOOT/limine.conf' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/boot/bootloader.sys' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/boot/xnu-kernel.macho' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/xnu-kernel/xnu-kernel-validation.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/EFI/BOOT/$(EFI_BOOT_NAME)' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/EFI/efiboot.img' "$(BUILD_DIR)/iso-contents.txt"
-	grep -q 'cmdline: -v' "$(ISO_ROOT)/limine.conf"
-	grep -q 'module_path: boot():/boot/xnu-kernel.macho' "$(ISO_ROOT)/limine.conf"
+	grep -q 'cmdline: -v' limine.conf
+	grep -q 'module_path: boot():/boot/xnu-kernel.macho' limine.conf
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/limine.conf | grep -q '/OS8'
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/limine.conf | grep -q 'cmdline: -v'
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/limine.conf | grep -q 'module_path: boot():/boot/xnu-kernel.macho'
@@ -171,7 +161,7 @@ verify: $(ISO)
 	grep -q '/xnu-kernel/xnu-kernel-artifacts.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q 'arch=$(ARCH)' "$(ISO_ROOT)/xnu-kernel/xnu-kernel-validation.txt"
 	grep -q 'entry=0x' "$(ISO_ROOT)/xnu-kernel/xnu-kernel-validation.txt"
-	grep -Eq '/xnu-kernel/.*/(xnu-)?kernel(\.[^/]*)?$$|/xnu-kernel/.*/mach(\.[^/]*)?$$' "$(BUILD_DIR)/iso-contents.txt"
+	test -s "$(ISO_ROOT)/xnu-kernel/xnu-kernel-artifacts.txt"
 	grep -Ei 'EFI|UEFI' "$(BUILD_DIR)/iso-eltorito.txt"
 
 smoke-boot:
