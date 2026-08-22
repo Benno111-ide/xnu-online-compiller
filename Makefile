@@ -31,15 +31,19 @@ else
 $(error Unsupported ARCH '$(ARCH)'; use amd64 or arm64)
 endif
 
-ifneq ($(strip $(XNU_KERNEL_ARTIFACT)),)
-ISO_PREREQS := $(XNU_STAMP)
-else
-ISO_PREREQS := build-xnu $(XNU_STAMP)
+ifneq ($(strip $(XNU_EFI_LOADER)),)
+ISO_LOADER_PREREQ := $(XNU_EFI_LOADER)
 endif
 
-.PHONY: all fetch-xnu verify-xnu fetch-limine install-build-deps build-xnu build-bootstub iso verify smoke-boot smoke-boot-capture virtualize-iso handoff-boot clean
+ifneq ($(strip $(XNU_KERNEL_ARTIFACT)),)
+ISO_PREREQS := require-xnu-efi-loader $(ISO_LOADER_PREREQ) $(XNU_STAMP)
+else
+ISO_PREREQS := require-xnu-efi-loader $(ISO_LOADER_PREREQ) build-xnu $(XNU_STAMP)
+endif
 
-all: build-xnu iso verify
+.PHONY: all fetch-xnu verify-xnu fetch-limine install-build-deps build-xnu build-bootstub require-xnu-efi-loader iso verify smoke-boot smoke-boot-capture virtualize-iso handoff-boot clean
+
+all: iso verify
 
 fetch-xnu:
 	sh scripts/fetch-xnu.sh "$(XNU_SOURCE_DIR)"
@@ -60,6 +64,15 @@ build-bootstub:
 	@echo "Limine bootstub is disabled; use XNU_EFI_LOADER=/path/to/$(EFI_BOOT_NAME)."
 	@exit 1
 
+require-xnu-efi-loader:
+	@if [ -z "$(strip $(XNU_EFI_LOADER))" ]; then \
+		echo "XNU_EFI_LOADER is required because the Limine bootstub is disabled." >&2; \
+		echo "Provide a real XNU/Darwin EFI loader, for example:" >&2; \
+		echo "  make ARCH=$(ARCH) XNU_EFI_LOADER=/path/to/$(EFI_BOOT_NAME) iso" >&2; \
+		echo "Apple's open XNU source does not include boot.efi/iBoot, so this repo cannot synthesize that file." >&2; \
+		exit 2; \
+	fi
+
 iso: $(ISO)
 
 $(BUILD_DIR):
@@ -70,8 +83,6 @@ $(XNU_STAMP): xnu-upstream.env | $(BUILD_DIR)
 	printf 'repo=%s\nref=%s\ncommit=%s\narch=%s\nxnu_arch=%s\n' "$$XNU_REPO_URL" "$$XNU_REF" "$$XNU_COMMIT" '$(ARCH)' '$(XNU_ARCH)' > $@
 
 $(ISO): $(ISO_PREREQS)
-	test -n "$(XNU_EFI_LOADER)"
-	test -s "$(XNU_EFI_LOADER)"
 	rm -rf "$(ISO_ROOT)"
 	mkdir -p "$(ISO_ROOT)/xnu-kernel" "$(ISO_ROOT)/boot" "$(ISO_ROOT)/EFI/BOOT" "$(BUILD_DIR)/efi"
 	printf 'apple-xnu-kernel-%s\n' '$(ARCH)' > "$(ISO_ROOT)/BUILD-LABEL.txt"
