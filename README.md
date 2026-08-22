@@ -18,14 +18,16 @@ target architecture:
 - `EFI/BOOT/BOOTX64.EFI` for `amd64`
 - `EFI/BOOT/BOOTAA64.EFI` for `arm64`
 
-For `amd64`, the default EFI is OpenCore from Acidanthera's OpenCorePkg release.
-OpenCore is an XNU/macOS-oriented UEFI bootloader with Apple-specific UEFI
-support and an XNU patch/injection engine. The ISO bundles both
-`EFI/BOOT/BOOTX64.EFI` and `EFI/OC`.
+By default, the build creates a small bundled fallback EFI app. That app makes
+the ISO UEFI-bootable and reports that `/boot/xnu-kernel.macho` is bundled, but
+it does not perform Apple's proprietary `boot.efi`/iBoot platform handoff.
 
-For `arm64`, the build still creates a small bundled fallback EFI app because
-OpenCore's release payload is X64 and Apple's arm64 `boot.efi`/iBoot path is
-not available from the open XNU source tree. Set
+For `amd64`, `XNU_EFI_VENDOR=opencore` can be used to package OpenCore from
+Acidanthera's OpenCorePkg release. OpenCore is XNU/macOS-oriented, but it is
+designed to chain into Apple `boot.efi`/macOS boot volumes rather than directly
+execute this ISO's raw `/boot/xnu-kernel.macho`, so it is opt-in.
+
+Set
 `XNU_EFI_LOADER=/path/to/BOOTX64.EFI` or
 `XNU_EFI_LOADER=/path/to/BOOTAA64.EFI` to override the default EFI with a
 specific loader.
