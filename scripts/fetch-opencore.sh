@@ -17,9 +17,30 @@ esac
 
 . ./xnu-upstream.env
 
+normalize_opencore_config() {
+    config=$1
+    python3 - "$config" <<'PY'
+from pathlib import Path
+import plistlib
+import sys
+
+config = Path(sys.argv[1])
+with config.open("rb") as f:
+    plist = plistlib.load(f)
+
+misc = plist.setdefault("Misc", {})
+security = misc.setdefault("Security", {})
+security["Vault"] = "Optional"
+
+with config.open("wb") as f:
+    plistlib.dump(plist, f, sort_keys=False)
+PY
+}
+
 if [ -s "$dst/X64/EFI/BOOT/BOOTx64.efi" ] &&
    [ -s "$dst/X64/EFI/OC/OpenCore.efi" ] &&
    [ -s "$dst/X64/EFI/OC/config.plist" ]; then
+    normalize_opencore_config "$dst/X64/EFI/OC/config.plist"
     exit 0
 fi
 
@@ -54,6 +75,8 @@ if [ ! -s "$tmp/X64/EFI/OC/config.plist" ]; then
         exit 1
     fi
 fi
+
+normalize_opencore_config "$tmp/X64/EFI/OC/config.plist"
 
 rm -rf "$dst"
 mv "$tmp" "$dst"

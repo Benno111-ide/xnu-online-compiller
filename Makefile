@@ -166,6 +166,7 @@ verify: $(ISO)
 		grep -q '/EFI/OC/config.plist' "$(BUILD_DIR)/iso-contents.txt"; \
 		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/OC/OpenCore.efi" >/dev/null; \
 		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/OC/config.plist" >/dev/null; \
+		python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1],"rb")); assert p["Misc"]["Security"]["Vault"] == "Optional"' "$(ISO_ROOT)/EFI/OC/config.plist"; \
 	fi
 	grep -q '/xnu-kernel/xnu-kernel-artifacts.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q 'arch=$(ARCH)' "$(ISO_ROOT)/xnu-kernel/xnu-kernel-validation.txt"
