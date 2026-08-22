@@ -170,7 +170,7 @@ verify: $(ISO)
 		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/OC/config.plist" >/dev/null; \
 		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/OC/Drivers/OpenRuntime.efi" >/dev/null; \
 		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/OC/Drivers/OpenHfsPlus.efi" >/dev/null; \
-		python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1],"rb")); s=p["Misc"]["Security"]; assert s["Vault"] == "Optional"; assert s["SecureBootModel"] == "Disabled"; assert [d["Path"] for d in p["UEFI"]["Drivers"] if d.get("Enabled")] == ["OpenRuntime.efi", "OpenHfsPlus.efi"]' "$(ISO_ROOT)/EFI/OC/config.plist"; \
+		python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1],"rb")); s=p["Misc"]["Security"]; g=p["PlatformInfo"]["Generic"]; assert s["Vault"] == "Optional"; assert s["SecureBootModel"] == "Disabled"; assert s["ScanPolicy"] == 0; assert g["SystemUUID"] != "00000000-0000-0000-0000-000000000000"; assert [d["Path"] for d in p["UEFI"]["Drivers"] if d.get("Enabled")] == ["OpenRuntime.efi", "OpenHfsPlus.efi"]' "$(ISO_ROOT)/EFI/OC/config.plist"; \
 	fi
 	grep -q '/xnu-kernel/xnu-kernel-artifacts.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q 'arch=$(ARCH)' "$(ISO_ROOT)/xnu-kernel/xnu-kernel-validation.txt"

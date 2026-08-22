@@ -29,9 +29,42 @@ with config.open("rb") as f:
     plist = plistlib.load(f)
 
 misc = plist.setdefault("Misc", {})
+misc["BlessOverride"] = []
+misc["Entries"] = []
+misc["Tools"] = []
+
+boot = misc.setdefault("Boot", {})
+boot["PickerMode"] = "Builtin"
+boot["ShowPicker"] = True
+boot["Timeout"] = 5
+
 security = misc.setdefault("Security", {})
+security["DmgLoading"] = "Any"
+security["ScanPolicy"] = 0
 security["SecureBootModel"] = "Disabled"
 security["Vault"] = "Optional"
+
+platform = plist.setdefault("PlatformInfo", {})
+platform["Automatic"] = True
+generic = platform.setdefault("Generic", {})
+generic["MLB"] = "OS8XNU00000000001"
+generic["ROM"] = b"\x02\x00\x00\x00\x00\x01"
+generic["SystemProductName"] = "iMac19,1"
+generic["SystemSerialNumber"] = "OS8XNU000001"
+generic["SystemUUID"] = "11111111-2222-3333-4444-555555555555"
+
+plist.setdefault("ACPI", {})["Add"] = []
+plist.setdefault("DeviceProperties", {})["Add"] = {}
+
+kernel = plist.setdefault("Kernel", {})
+kernel["Add"] = []
+kernel["Block"] = []
+kernel["Force"] = []
+kernel["Patch"] = []
+
+nvram = plist.setdefault("NVRAM", {})
+nvram["Add"] = {}
+nvram["Delete"] = {}
 
 uefi = plist.setdefault("UEFI", {})
 uefi["Drivers"] = [
