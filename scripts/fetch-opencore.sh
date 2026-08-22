@@ -33,6 +33,24 @@ security = misc.setdefault("Security", {})
 security["SecureBootModel"] = "Disabled"
 security["Vault"] = "Optional"
 
+uefi = plist.setdefault("UEFI", {})
+uefi["Drivers"] = [
+    {
+        "Arguments": "",
+        "Comment": "OpenCore runtime services",
+        "Enabled": True,
+        "LoadEarly": False,
+        "Path": "OpenRuntime.efi",
+    },
+    {
+        "Arguments": "",
+        "Comment": "HFS+ filesystem support bundled with OpenCore",
+        "Enabled": True,
+        "LoadEarly": False,
+        "Path": "OpenHfsPlus.efi",
+    },
+]
+
 with config.open("wb") as f:
     plistlib.dump(plist, f, sort_keys=False)
 PY
@@ -67,6 +85,8 @@ rm -f "$archive"
 
 test -s "$tmp/X64/EFI/BOOT/BOOTx64.efi"
 test -s "$tmp/X64/EFI/OC/OpenCore.efi"
+test -s "$tmp/X64/EFI/OC/Drivers/OpenRuntime.efi"
+test -s "$tmp/X64/EFI/OC/Drivers/OpenHfsPlus.efi"
 
 if [ ! -s "$tmp/X64/EFI/OC/config.plist" ]; then
     if [ -s "$tmp/Docs/Sample.plist" ]; then

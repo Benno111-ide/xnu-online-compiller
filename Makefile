@@ -164,9 +164,13 @@ verify: $(ISO)
 	if [ "$(ISO_EFI_VENDOR)" = "opencore" ]; then \
 		grep -q '/EFI/OC/OpenCore.efi' "$(BUILD_DIR)/iso-contents.txt"; \
 		grep -q '/EFI/OC/config.plist' "$(BUILD_DIR)/iso-contents.txt"; \
+		grep -q '/EFI/OC/Drivers/OpenRuntime.efi' "$(BUILD_DIR)/iso-contents.txt"; \
+		grep -q '/EFI/OC/Drivers/OpenHfsPlus.efi' "$(BUILD_DIR)/iso-contents.txt"; \
 		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/OC/OpenCore.efi" >/dev/null; \
 		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/OC/config.plist" >/dev/null; \
-		python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1],"rb")); s=p["Misc"]["Security"]; assert s["Vault"] == "Optional"; assert s["SecureBootModel"] == "Disabled"' "$(ISO_ROOT)/EFI/OC/config.plist"; \
+		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/OC/Drivers/OpenRuntime.efi" >/dev/null; \
+		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/OC/Drivers/OpenHfsPlus.efi" >/dev/null; \
+		python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1],"rb")); s=p["Misc"]["Security"]; assert s["Vault"] == "Optional"; assert s["SecureBootModel"] == "Disabled"; assert [d["Path"] for d in p["UEFI"]["Drivers"] if d.get("Enabled")] == ["OpenRuntime.efi", "OpenHfsPlus.efi"]' "$(ISO_ROOT)/EFI/OC/config.plist"; \
 	fi
 	grep -q '/xnu-kernel/xnu-kernel-artifacts.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q 'arch=$(ARCH)' "$(ISO_ROOT)/xnu-kernel/xnu-kernel-validation.txt"
