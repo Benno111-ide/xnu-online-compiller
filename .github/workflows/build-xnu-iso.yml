@@ -27,7 +27,7 @@ name: Build Apple XNU kernels
 
 jobs:
   build:
-    name: Build Apple XNU ${{ matrix.arch }} kernel
+    name: Build Apple XNU ${{ matrix.arch }} kernel ISO
     runs-on: macos-15
     strategy:
       fail-fast: false
@@ -74,7 +74,7 @@ jobs:
           esac
 
           if [ -z "$efi_loader_url" ]; then
-            echo "No XNU EFI loader URL configured for $ARCH; CI will build kernel artifacts only."
+            echo "No external XNU EFI loader URL configured for $ARCH; CI will use the bundled fallback loader."
             echo "path=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -87,8 +87,15 @@ jobs:
           echo "XNU_EFI_LOADER=$efi_loader" >> "$GITHUB_ENV"
           echo "path=$efi_loader" >> "$GITHUB_OUTPUT"
 
-      - name: Build Apple XNU kernel artifacts
-        run: make ARCH=${{ matrix.arch }} build-xnu
+      - name: Build Apple XNU kernel and bootable ISO
+        env:
+          XNU_EFI_LOADER: ${{ steps.efi_loader.outputs.path }}
+        run: |
+          if [ -n "$XNU_EFI_LOADER" ]; then
+            make ARCH=${{ matrix.arch }} XNU_EFI_LOADER="$XNU_EFI_LOADER" all
+          else
+            make ARCH=${{ matrix.arch }} all
+          fi
 
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
@@ -99,12 +106,7 @@ jobs:
             build/${{ matrix.arch }}/xnu-build/artifacts/**
           if-no-files-found: ignore
 
-      - name: Package ISO with provided XNU EFI loader
-        if: steps.efi_loader.outputs.path != ''
-        run: make ARCH=${{ matrix.arch }} XNU_EFI_LOADER="${{ steps.efi_loader.outputs.path }}" iso verify
-
       - name: Upload ISO artifact
-        if: steps.efi_loader.outputs.path != ''
         uses: actions/upload-artifact@v4
         with:
           name: apple-xnu-kernel-${{ matrix.arch }}-iso
@@ -115,7 +117,6 @@ jobs:
           if-no-files-found: ignore
 
       - name: Smoke boot XNU EFI loader under UEFI
-        if: steps.efi_loader.outputs.path != ''
         run: make ARCH=${{ matrix.arch }} smoke-boot
 
       - name: Download external arm64 XNU artifact for handoff capture

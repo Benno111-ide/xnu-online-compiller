@@ -9,37 +9,44 @@ The build uses Apple's official XNU source from
 <https://github.com/apple-oss-distributions/xnu>. The pinned upstream revision
 is recorded in `xnu-upstream.env`; CI fetches that exact commit, verifies the
 expected XNU source tree, invokes Apple XNU's own Makefile on macOS/Xcode,
-packages the produced kernel artifacts into each ISO, verifies the ISO contents,
-and uploads the ISO as a workflow artifact.
+packages the produced kernel artifacts into a bootable UEFI ISO, verifies the
+ISO contents, and uploads the ISO as a workflow artifact.
 
-Each ISO includes a caller-provided XNU/Darwin EFI loader at the standard
-fallback path for the target architecture:
+Each ISO includes an EFI application at the standard fallback path for the
+target architecture:
 
 - `EFI/BOOT/BOOTX64.EFI` for `amd64`
 - `EFI/BOOT/BOOTAA64.EFI` for `arm64`
 
-Set `XNU_EFI_LOADER=/path/to/BOOTX64.EFI` or
-`XNU_EFI_LOADER=/path/to/BOOTAA64.EFI` when building an ISO. Apple's open XNU
-source tree does not include Apple's proprietary `boot.efi`/iBoot loader, so the
-build intentionally fails without this explicit EFI input.
+By default, the build creates a small bundled XNU EFI fallback app. That app
+makes the ISO UEFI-bootable and reports that `/boot/xnu-kernel.macho` is
+bundled, but it does not perform Apple's proprietary `boot.efi`/iBoot platform
+handoff. Set `XNU_EFI_LOADER=/path/to/BOOTX64.EFI` or
+`XNU_EFI_LOADER=/path/to/BOOTAA64.EFI` to replace the fallback with a real
+XNU/Darwin EFI loader.
 
 There is no local placeholder kernel source in this repository. By default, the
 build fails unless Apple XNU's external source tree produces real kernel
 artifacts. The ISO no longer builds or packages the old Limine
-`bootloader.sys` handoff stub; the provided XNU EFI loader is responsible for
-loading the staged XNU Mach-O artifact and performing the platform handoff.
+`bootloader.sys` handoff stub.
 
 Run the same build on an Ubuntu machine with:
 
 ```sh
 brew install xorriso
 brew install mtools
-make ARCH=amd64 XNU_EFI_LOADER=/path/to/BOOTX64.EFI all
-make ARCH=arm64 XNU_EFI_LOADER=/path/to/BOOTAA64.EFI all
+make ARCH=amd64 all
+make ARCH=arm64 all
 ```
 
 If you already have a built XNU Mach-O from a macOS/Xcode machine, package it
-with a matching EFI loader from this workspace with:
+with the bundled fallback loader from this workspace with:
+
+```sh
+make ARCH=arm64 XNU_KERNEL_ARTIFACT=/path/to/kernel.development iso verify smoke-boot
+```
+
+To use a real XNU/Darwin EFI handoff loader instead:
 
 ```sh
 make ARCH=arm64 \
@@ -49,8 +56,8 @@ make ARCH=arm64 \
 ```
 
 That target packages the external kernel as `/boot/xnu-kernel.macho`, embeds
-the supplied EFI loader in `EFI/BOOT/`, boots QEMU, and writes the capture
-report under `build/arm64/efi-smoke/`.
+the EFI loader in `EFI/BOOT/`, boots QEMU, and writes the capture report under
+`build/arm64/efi-smoke/`.
 
 Before packaging, `scripts/validate-xnu-macho.py` checks that the selected
 kernel artifact is a Mach-O/FAT Mach-O with the requested architecture slice,

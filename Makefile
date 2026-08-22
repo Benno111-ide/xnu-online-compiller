@@ -17,6 +17,7 @@ XNU_BUILD_DIR := $(BUILD_DIR)/xnu-build
 XNU_ARTIFACTS_DIR := $(XNU_BUILD_DIR)/artifacts
 ISO := $(BUILD_DIR)/apple-xnu-kernel-$(ARCH).iso
 EFI_DIR := $(BUILD_DIR)/efi
+BUILTIN_XNU_EFI_LOADER = $(EFI_DIR)/builtin/$(EFI_BOOT_NAME)
 EFI_IMAGE_SIZE_KB := 131072
 
 ifeq ($(ARCH),amd64)
@@ -32,23 +33,22 @@ $(error Unsupported ARCH '$(ARCH)'; use amd64 or arm64)
 endif
 
 ifneq ($(strip $(XNU_EFI_LOADER)),)
+ISO_LOADER := $(XNU_EFI_LOADER)
 ISO_LOADER_PREREQ := $(XNU_EFI_LOADER)
+else
+ISO_LOADER := $(BUILTIN_XNU_EFI_LOADER)
+ISO_LOADER_PREREQ := build-xnu-efi-loader
 endif
 
 ifneq ($(strip $(XNU_KERNEL_ARTIFACT)),)
-ISO_PREREQS := require-xnu-efi-loader $(ISO_LOADER_PREREQ) $(XNU_STAMP)
+ISO_PREREQS := $(ISO_LOADER_PREREQ) $(XNU_STAMP)
 else
-ISO_PREREQS := require-xnu-efi-loader $(ISO_LOADER_PREREQ) build-xnu $(XNU_STAMP)
+ISO_PREREQS := $(ISO_LOADER_PREREQ) build-xnu $(XNU_STAMP)
 endif
 
-.PHONY: all fetch-xnu verify-xnu fetch-limine install-build-deps build-xnu build-bootstub require-xnu-efi-loader iso verify smoke-boot smoke-boot-capture virtualize-iso handoff-boot clean
+.PHONY: all fetch-xnu verify-xnu fetch-limine install-build-deps build-xnu build-bootstub build-xnu-efi-loader iso verify smoke-boot smoke-boot-capture virtualize-iso handoff-boot clean
 
-ifneq ($(strip $(XNU_EFI_LOADER)),)
 all: iso verify
-else
-all: build-xnu
-	@echo "Built XNU kernel artifacts only; set XNU_EFI_LOADER=/path/to/$(EFI_BOOT_NAME) to package a bootable EFI ISO."
-endif
 
 fetch-xnu:
 	sh scripts/fetch-xnu.sh "$(XNU_SOURCE_DIR)"
@@ -69,14 +69,8 @@ build-bootstub:
 	@echo "Limine bootstub is disabled; use XNU_EFI_LOADER=/path/to/$(EFI_BOOT_NAME)."
 	@exit 1
 
-require-xnu-efi-loader:
-	@if [ -z "$(strip $(XNU_EFI_LOADER))" ]; then \
-		echo "XNU_EFI_LOADER is required because the Limine bootstub is disabled." >&2; \
-		echo "Provide a real XNU/Darwin EFI loader, for example:" >&2; \
-		echo "  make ARCH=$(ARCH) XNU_EFI_LOADER=/path/to/$(EFI_BOOT_NAME) iso" >&2; \
-		echo "Apple's open XNU source does not include boot.efi/iBoot, so this repo cannot synthesize that file." >&2; \
-		exit 2; \
-	fi
+build-xnu-efi-loader:
+	sh scripts/build-xnu-efi-loader.sh "$(ARCH)" "$(BUILD_DIR)/xnu-efi-loader" "$(BUILTIN_XNU_EFI_LOADER)"
 
 iso: $(ISO)
 
@@ -114,7 +108,7 @@ $(ISO): $(ISO_PREREQS)
 		printf '%s\n' "$$xnu_validation" | tee "$(ISO_ROOT)/xnu-kernel/xnu-kernel-validation.txt"; \
 	fi; \
 	cp "$$xnu_kernel_artifact" "$(ISO_ROOT)/boot/xnu-kernel.macho"
-	cp "$(XNU_EFI_LOADER)" "$(EFI_DIR)/$(EFI_BOOT_NAME)"
+	cp "$(ISO_LOADER)" "$(EFI_DIR)/$(EFI_BOOT_NAME)"
 	cp "$(EFI_DIR)/$(EFI_BOOT_NAME)" "$(ISO_ROOT)/EFI/BOOT/$(EFI_BOOT_NAME)"
 	if command -v truncate >/dev/null 2>&1; then \
 		truncate -s "$$(($(EFI_IMAGE_SIZE_KB) * 1024))" "$(ISO_ROOT)/EFI/efiboot.img"; \
