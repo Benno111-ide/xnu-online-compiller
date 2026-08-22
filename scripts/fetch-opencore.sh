@@ -30,6 +30,7 @@ with config.open("rb") as f:
 
 misc = plist.setdefault("Misc", {})
 security = misc.setdefault("Security", {})
+security["SecureBootModel"] = "Disabled"
 security["Vault"] = "Optional"
 
 with config.open("wb") as f:
