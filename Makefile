@@ -19,6 +19,7 @@ ISO := $(BUILD_DIR)/apple-xnu-kernel-$(ARCH).iso
 EFI_DIR := $(BUILD_DIR)/efi
 BUILTIN_XNU_EFI_LOADER = $(EFI_DIR)/builtin/$(EFI_BOOT_NAME)
 EFI_IMAGE_SIZE_KB := 131072
+OPENCORE_DIR := build/opencore
 
 ifeq ($(ARCH),amd64)
 XNU_ARCH := X86_64
@@ -35,9 +36,17 @@ endif
 ifneq ($(strip $(XNU_EFI_LOADER)),)
 ISO_LOADER := $(XNU_EFI_LOADER)
 ISO_LOADER_PREREQ := $(XNU_EFI_LOADER)
+ISO_EFI_VENDOR := external
+else
+ifeq ($(ARCH),amd64)
+ISO_LOADER := $(OPENCORE_DIR)/X64/EFI/BOOT/BOOTx64.efi
+ISO_LOADER_PREREQ := fetch-opencore
+ISO_EFI_VENDOR := opencore
 else
 ISO_LOADER := $(BUILTIN_XNU_EFI_LOADER)
 ISO_LOADER_PREREQ := build-xnu-efi-loader
+ISO_EFI_VENDOR := fallback
+endif
 endif
 
 ifneq ($(strip $(XNU_KERNEL_ARTIFACT)),)
@@ -46,7 +55,7 @@ else
 ISO_PREREQS := $(ISO_LOADER_PREREQ) build-xnu $(XNU_STAMP)
 endif
 
-.PHONY: all fetch-xnu verify-xnu fetch-limine install-build-deps build-xnu build-bootstub build-xnu-efi-loader iso verify smoke-boot smoke-boot-capture virtualize-iso handoff-boot clean
+.PHONY: all fetch-xnu verify-xnu fetch-limine fetch-opencore install-build-deps build-xnu build-bootstub build-xnu-efi-loader iso verify smoke-boot smoke-boot-capture virtualize-iso handoff-boot clean
 
 all: iso verify
 
@@ -58,6 +67,9 @@ verify-xnu: fetch-xnu
 
 fetch-limine:
 	@echo "Limine is disabled; provide XNU_EFI_LOADER=/path/to/$(EFI_BOOT_NAME) for ISO builds."
+
+fetch-opencore:
+	sh scripts/fetch-opencore.sh "$(OPENCORE_DIR)"
 
 install-build-deps:
 	sh scripts/install-xnu-build-deps.sh "$(BUILD_DEPS_DIR)"
@@ -86,6 +98,8 @@ $(ISO): $(ISO_PREREQS)
 	mkdir -p "$(ISO_ROOT)/xnu-kernel" "$(ISO_ROOT)/boot" "$(ISO_ROOT)/EFI/BOOT" "$(BUILD_DIR)/efi"
 	printf 'apple-xnu-kernel-%s\n' '$(ARCH)' > "$(ISO_ROOT)/BUILD-LABEL.txt"
 	cp "$(XNU_STAMP)" "$(ISO_ROOT)/XNU-UPSTREAM.txt"
+	. ./xnu-upstream.env; \
+	printf 'efi_vendor=%s\nopencore_repo=%s\nopencore_version=%s\nopencore_binary_url=%s\n' '$(ISO_EFI_VENDOR)' "$$OPENCORE_REPO_URL" "$$OPENCORE_VERSION" "$$OPENCORE_BINARY_URL" > "$(ISO_ROOT)/EFI-UPSTREAM.txt"
 	if [ -n "$(XNU_KERNEL_ARTIFACT)" ]; then \
 		test -s "$(XNU_KERNEL_ARTIFACT)"; \
 		xnu_validation=$$(python3 scripts/validate-xnu-macho.py "$(ARCH)" "$(XNU_KERNEL_ARTIFACT)") || exit 1; \
@@ -110,6 +124,10 @@ $(ISO): $(ISO_PREREQS)
 	cp "$$xnu_kernel_artifact" "$(ISO_ROOT)/boot/xnu-kernel.macho"
 	cp "$(ISO_LOADER)" "$(EFI_DIR)/$(EFI_BOOT_NAME)"
 	cp "$(EFI_DIR)/$(EFI_BOOT_NAME)" "$(ISO_ROOT)/EFI/BOOT/$(EFI_BOOT_NAME)"
+	if [ "$(ISO_EFI_VENDOR)" = "opencore" ]; then \
+		mkdir -p "$(ISO_ROOT)/EFI/OC"; \
+		tar -C "$(OPENCORE_DIR)/X64/EFI/OC" -cf - . | tar -C "$(ISO_ROOT)/EFI/OC" -xf -; \
+	fi
 	if command -v truncate >/dev/null 2>&1; then \
 		truncate -s "$$(($(EFI_IMAGE_SIZE_KB) * 1024))" "$(ISO_ROOT)/EFI/efiboot.img"; \
 	else \
@@ -118,6 +136,10 @@ $(ISO): $(ISO_PREREQS)
 	mformat -i "$(ISO_ROOT)/EFI/efiboot.img" ::
 	mmd -i "$(ISO_ROOT)/EFI/efiboot.img" ::/EFI ::/EFI/BOOT ::/boot
 	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(EFI_DIR)/$(EFI_BOOT_NAME)" "::/EFI/BOOT/$(EFI_BOOT_NAME)"
+	if [ "$(ISO_EFI_VENDOR)" = "opencore" ]; then \
+		mmd -i "$(ISO_ROOT)/EFI/efiboot.img" ::/EFI/OC; \
+		mcopy -s -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/EFI/OC"/* "::/EFI/OC/"; \
+	fi
 	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/boot/xnu-kernel.macho" "::/boot/xnu-kernel.macho"
 	xorriso -as mkisofs -quiet -J -R -V APPLE_XNU_$(ARCH) -eltorito-alt-boot -e EFI/efiboot.img -no-emul-boot -o "$@" "$(ISO_ROOT)"
 
@@ -132,12 +154,19 @@ verify: $(ISO)
 	xorriso -indev "$(ISO)" -report_el_torito plain 2>/dev/null | tee "$(BUILD_DIR)/iso-eltorito.txt"
 	grep -q '/BUILD-LABEL.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/XNU-UPSTREAM.txt' "$(BUILD_DIR)/iso-contents.txt"
+	grep -q '/EFI-UPSTREAM.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/boot/xnu-kernel.macho' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/xnu-kernel/xnu-kernel-validation.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/EFI/BOOT/$(EFI_BOOT_NAME)' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/EFI/efiboot.img' "$(BUILD_DIR)/iso-contents.txt"
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/BOOT/$(EFI_BOOT_NAME)" >/dev/null
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/boot/xnu-kernel.macho" >/dev/null
+	if [ "$(ISO_EFI_VENDOR)" = "opencore" ]; then \
+		grep -q '/EFI/OC/OpenCore.efi' "$(BUILD_DIR)/iso-contents.txt"; \
+		grep -q '/EFI/OC/config.plist' "$(BUILD_DIR)/iso-contents.txt"; \
+		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/OC/OpenCore.efi" >/dev/null; \
+		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/OC/config.plist" >/dev/null; \
+	fi
 	grep -q '/xnu-kernel/xnu-kernel-artifacts.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q 'arch=$(ARCH)' "$(ISO_ROOT)/xnu-kernel/xnu-kernel-validation.txt"
 	grep -q 'entry=0x' "$(ISO_ROOT)/xnu-kernel/xnu-kernel-validation.txt"

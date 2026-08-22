@@ -18,12 +18,17 @@ target architecture:
 - `EFI/BOOT/BOOTX64.EFI` for `amd64`
 - `EFI/BOOT/BOOTAA64.EFI` for `arm64`
 
-By default, the build creates a small bundled XNU EFI fallback app. That app
-makes the ISO UEFI-bootable and reports that `/boot/xnu-kernel.macho` is
-bundled, but it does not perform Apple's proprietary `boot.efi`/iBoot platform
-handoff. Set `XNU_EFI_LOADER=/path/to/BOOTX64.EFI` or
-`XNU_EFI_LOADER=/path/to/BOOTAA64.EFI` to replace the fallback with a real
-XNU/Darwin EFI loader.
+For `amd64`, the default EFI is OpenCore from Acidanthera's OpenCorePkg release.
+OpenCore is an XNU/macOS-oriented UEFI bootloader with Apple-specific UEFI
+support and an XNU patch/injection engine. The ISO bundles both
+`EFI/BOOT/BOOTX64.EFI` and `EFI/OC`.
+
+For `arm64`, the build still creates a small bundled fallback EFI app because
+OpenCore's release payload is X64 and Apple's arm64 `boot.efi`/iBoot path is
+not available from the open XNU source tree. Set
+`XNU_EFI_LOADER=/path/to/BOOTX64.EFI` or
+`XNU_EFI_LOADER=/path/to/BOOTAA64.EFI` to override the default EFI with a
+specific loader.
 
 There is no local placeholder kernel source in this repository. By default, the
 build fails unless Apple XNU's external source tree produces real kernel
@@ -40,7 +45,7 @@ make ARCH=arm64 all
 ```
 
 If you already have a built XNU Mach-O from a macOS/Xcode machine, package it
-with the bundled fallback loader from this workspace with:
+with the default EFI from this workspace with:
 
 ```sh
 make ARCH=arm64 XNU_KERNEL_ARTIFACT=/path/to/kernel.development iso verify smoke-boot
