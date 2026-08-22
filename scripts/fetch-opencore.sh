@@ -21,10 +21,12 @@ normalize_opencore_config() {
     config=$1
     python3 - "$config" <<'PY'
 from pathlib import Path
+import os
 import plistlib
 import sys
 
 config = Path(sys.argv[1])
+boot_args = os.environ.get("XNU_BOOT_ARGS", "-v keepsyms=1 debug=0x144 serial=3")
 with config.open("rb") as f:
     plist = plistlib.load(f)
 
@@ -63,7 +65,11 @@ kernel["Force"] = []
 kernel["Patch"] = []
 
 nvram = plist.setdefault("NVRAM", {})
-nvram["Add"] = {}
+nvram["Add"] = {
+    "7C436110-AB2A-4BBB-A880-FE41995C9F82": {
+        "boot-args": boot_args,
+    },
+}
 nvram["Delete"] = {}
 
 uefi = plist.setdefault("UEFI", {})

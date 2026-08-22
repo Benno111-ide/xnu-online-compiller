@@ -9,6 +9,7 @@ fi
 arch=$1
 work=$2
 output=$3
+boot_args=${XNU_BOOT_ARGS:-"-v keepsyms=1 debug=0x144 serial=3"}
 
 llvm_prefix=$(brew --prefix llvm 2>/dev/null || true)
 clang="${CLANG:-${llvm_prefix:+$llvm_prefix/bin/clang}}"
@@ -22,10 +23,27 @@ command -v "$clang" >/dev/null 2>&1
 mkdir -p "$work" "$(dirname "$output")"
 
 loader_c="$work/xnu-efi-loader.c"
+boot_args_header="$work/xnu-efi-loader-boot-args.h"
+
+python3 - "$boot_args" "$boot_args_header" <<'PY'
+import sys
+
+boot_args, output = sys.argv[1], sys.argv[2]
+escaped = (
+    boot_args
+    .replace("\\", "\\\\")
+    .replace('"', '\\"')
+    .replace("\r", "\\r")
+    .replace("\n", "\\n")
+)
+with open(output, "w", encoding="ascii") as f:
+    f.write(f'#define XNU_BOOT_ARGS_TEXT u"  {escaped}\\r\\n"\n')
+PY
 
 cat > "$loader_c" <<'SOURCE'
 #include <stdint.h>
 #include <stddef.h>
+#include "xnu-efi-loader-boot-args.h"
 
 typedef uint64_t UINT64;
 typedef int64_t INT64;
@@ -100,6 +118,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system_tab
     puts16(system_table, u"\r\n");
     puts16(system_table, u"This ISO is UEFI bootable and bundles:\r\n");
     puts16(system_table, u"  /boot/xnu-kernel.macho\r\n");
+    puts16(system_table, u"Default boot-args:\r\n");
+    puts16(system_table, XNU_BOOT_ARGS_TEXT);
     puts16(system_table, u"\r\n");
     puts16(system_table, u"Apple boot.efi/iBoot is not part of the open XNU source tree.\r\n");
     puts16(system_table, u"Provide XNU_EFI_LOADER=/path/to/BOOT*.EFI to replace this fallback\r\n");

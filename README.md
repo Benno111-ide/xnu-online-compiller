@@ -30,6 +30,17 @@ not available from the open XNU source tree. Set
 `XNU_EFI_LOADER=/path/to/BOOTAA64.EFI` to override the default EFI with a
 specific loader.
 
+The default kernel flags are:
+
+```sh
+XNU_BOOT_ARGS="-v keepsyms=1 debug=0x144 serial=3"
+```
+
+For OpenCore builds, these are written to
+`NVRAM/Add/7C436110-AB2A-4BBB-A880-FE41995C9F82/boot-args` in
+`EFI/OC/config.plist`. The ISO also includes `BOOT-ARGS.txt` with the same
+value.
+
 There is no local placeholder kernel source in this repository. By default, the
 build fails unless Apple XNU's external source tree produces real kernel
 artifacts. The ISO no longer builds or packages the old Limine

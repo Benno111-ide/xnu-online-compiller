@@ -2,6 +2,7 @@ ARCH ?= amd64
 XNU_SOURCE_DIR ?= build/xnu-source
 XNU_KERNEL_ARTIFACT ?=
 XNU_EFI_LOADER ?=
+XNU_BOOT_ARGS ?= -v keepsyms=1 debug=0x144 serial=3
 
 QEMU_MENU_WAIT ?= 14
 QEMU_BOOT_DUMPS ?= 1
@@ -69,7 +70,7 @@ fetch-limine:
 	@echo "Limine is disabled; provide XNU_EFI_LOADER=/path/to/$(EFI_BOOT_NAME) for ISO builds."
 
 fetch-opencore:
-	sh scripts/fetch-opencore.sh "$(OPENCORE_DIR)"
+	XNU_BOOT_ARGS="$(XNU_BOOT_ARGS)" sh scripts/fetch-opencore.sh "$(OPENCORE_DIR)"
 
 install-build-deps:
 	sh scripts/install-xnu-build-deps.sh "$(BUILD_DEPS_DIR)"
@@ -82,7 +83,7 @@ build-bootstub:
 	@exit 1
 
 build-xnu-efi-loader:
-	sh scripts/build-xnu-efi-loader.sh "$(ARCH)" "$(BUILD_DIR)/xnu-efi-loader" "$(BUILTIN_XNU_EFI_LOADER)"
+	XNU_BOOT_ARGS="$(XNU_BOOT_ARGS)" sh scripts/build-xnu-efi-loader.sh "$(ARCH)" "$(BUILD_DIR)/xnu-efi-loader" "$(BUILTIN_XNU_EFI_LOADER)"
 
 iso: $(ISO)
 
@@ -97,6 +98,7 @@ $(ISO): $(ISO_PREREQS)
 	rm -rf "$(ISO_ROOT)"
 	mkdir -p "$(ISO_ROOT)/xnu-kernel" "$(ISO_ROOT)/boot" "$(ISO_ROOT)/EFI/BOOT" "$(BUILD_DIR)/efi"
 	printf 'apple-xnu-kernel-%s\n' '$(ARCH)' > "$(ISO_ROOT)/BUILD-LABEL.txt"
+	printf '%s\n' "$(XNU_BOOT_ARGS)" > "$(ISO_ROOT)/BOOT-ARGS.txt"
 	cp "$(XNU_STAMP)" "$(ISO_ROOT)/XNU-UPSTREAM.txt"
 	. ./xnu-upstream.env; \
 	printf 'efi_vendor=%s\nopencore_repo=%s\nopencore_version=%s\nopencore_binary_url=%s\n' '$(ISO_EFI_VENDOR)' "$$OPENCORE_REPO_URL" "$$OPENCORE_VERSION" "$$OPENCORE_BINARY_URL" > "$(ISO_ROOT)/EFI-UPSTREAM.txt"
@@ -136,6 +138,7 @@ $(ISO): $(ISO_PREREQS)
 	mformat -i "$(ISO_ROOT)/EFI/efiboot.img" ::
 	mmd -i "$(ISO_ROOT)/EFI/efiboot.img" ::/EFI ::/EFI/BOOT ::/boot
 	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(EFI_DIR)/$(EFI_BOOT_NAME)" "::/EFI/BOOT/$(EFI_BOOT_NAME)"
+	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/BOOT-ARGS.txt" "::/BOOT-ARGS.txt"
 	if [ "$(ISO_EFI_VENDOR)" = "opencore" ]; then \
 		mmd -i "$(ISO_ROOT)/EFI/efiboot.img" ::/EFI/OC; \
 		mcopy -s -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/EFI/OC"/* "::/EFI/OC/"; \
@@ -153,6 +156,7 @@ verify: $(ISO)
 	fi | tee "$(BUILD_DIR)/iso-contents.txt"
 	xorriso -indev "$(ISO)" -report_el_torito plain 2>/dev/null | tee "$(BUILD_DIR)/iso-eltorito.txt"
 	grep -q '/BUILD-LABEL.txt' "$(BUILD_DIR)/iso-contents.txt"
+	grep -q '/BOOT-ARGS.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/XNU-UPSTREAM.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/EFI-UPSTREAM.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/boot/xnu-kernel.macho' "$(BUILD_DIR)/iso-contents.txt"
@@ -160,6 +164,7 @@ verify: $(ISO)
 	grep -q '/EFI/BOOT/$(EFI_BOOT_NAME)' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q '/EFI/efiboot.img' "$(BUILD_DIR)/iso-contents.txt"
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/BOOT/$(EFI_BOOT_NAME)" >/dev/null
+	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/BOOT-ARGS.txt" | grep -q -- "$(XNU_BOOT_ARGS)"
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/boot/xnu-kernel.macho" >/dev/null
 	if [ "$(ISO_EFI_VENDOR)" = "opencore" ]; then \
 		grep -q '/EFI/OC/OpenCore.efi' "$(BUILD_DIR)/iso-contents.txt"; \
@@ -170,7 +175,7 @@ verify: $(ISO)
 		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/OC/config.plist" >/dev/null; \
 		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/OC/Drivers/OpenRuntime.efi" >/dev/null; \
 		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/OC/Drivers/OpenHfsPlus.efi" >/dev/null; \
-		python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1],"rb")); s=p["Misc"]["Security"]; g=p["PlatformInfo"]["Generic"]; assert s["Vault"] == "Optional"; assert s["SecureBootModel"] == "Disabled"; assert s["ScanPolicy"] == 0; assert g["SystemUUID"] != "00000000-0000-0000-0000-000000000000"; assert [d["Path"] for d in p["UEFI"]["Drivers"] if d.get("Enabled")] == ["OpenRuntime.efi", "OpenHfsPlus.efi"]' "$(ISO_ROOT)/EFI/OC/config.plist"; \
+		python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1],"rb")); s=p["Misc"]["Security"]; g=p["PlatformInfo"]["Generic"]; n=p["NVRAM"]["Add"]["7C436110-AB2A-4BBB-A880-FE41995C9F82"]; assert s["Vault"] == "Optional"; assert s["SecureBootModel"] == "Disabled"; assert s["ScanPolicy"] == 0; assert g["SystemUUID"] != "00000000-0000-0000-0000-000000000000"; assert n["boot-args"] == sys.argv[2]; assert [d["Path"] for d in p["UEFI"]["Drivers"] if d.get("Enabled")] == ["OpenRuntime.efi", "OpenHfsPlus.efi"]' "$(ISO_ROOT)/EFI/OC/config.plist" "$(XNU_BOOT_ARGS)"; \
 	fi
 	grep -q '/xnu-kernel/xnu-kernel-artifacts.txt' "$(BUILD_DIR)/iso-contents.txt"
 	grep -q 'arch=$(ARCH)' "$(ISO_ROOT)/xnu-kernel/xnu-kernel-validation.txt"
