@@ -2,7 +2,6 @@ ARCH ?= amd64
 XNU_SOURCE_DIR ?= build/xnu-source
 XNU_KERNEL_ARTIFACT ?=
 XNU_EFI_LOADER ?=
-XNU_EFI_VENDOR ?= fallback
 
 QEMU_MENU_WAIT ?= 14
 QEMU_BOOT_DUMPS ?= 1
@@ -39,19 +38,14 @@ ISO_LOADER := $(XNU_EFI_LOADER)
 ISO_LOADER_PREREQ := $(XNU_EFI_LOADER)
 ISO_EFI_VENDOR := external
 else
-ifeq ($(XNU_EFI_VENDOR),opencore)
-ifneq ($(ARCH),amd64)
-$(error XNU_EFI_VENDOR=opencore is only supported for ARCH=amd64)
-endif
+ifeq ($(ARCH),amd64)
 ISO_LOADER := $(OPENCORE_DIR)/X64/EFI/BOOT/BOOTx64.efi
 ISO_LOADER_PREREQ := fetch-opencore
 ISO_EFI_VENDOR := opencore
-else ifeq ($(XNU_EFI_VENDOR),fallback)
+else
 ISO_LOADER := $(BUILTIN_XNU_EFI_LOADER)
 ISO_LOADER_PREREQ := build-xnu-efi-loader
 ISO_EFI_VENDOR := fallback
-else
-$(error Unsupported XNU_EFI_VENDOR '$(XNU_EFI_VENDOR)'; use fallback or opencore)
 endif
 endif
 

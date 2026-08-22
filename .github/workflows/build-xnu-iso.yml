@@ -74,7 +74,7 @@ jobs:
           esac
 
           if [ -z "$efi_loader_url" ]; then
-            echo "No external XNU EFI loader URL configured for $ARCH; CI will use the bundled fallback EFI."
+            echo "No external XNU EFI loader URL configured for $ARCH; CI will use the repository default EFI."
             echo "path=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
