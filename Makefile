@@ -43,7 +43,12 @@ endif
 
 .PHONY: all fetch-xnu verify-xnu fetch-limine install-build-deps build-xnu build-bootstub require-xnu-efi-loader iso verify smoke-boot smoke-boot-capture virtualize-iso handoff-boot clean
 
+ifneq ($(strip $(XNU_EFI_LOADER)),)
 all: iso verify
+else
+all: build-xnu
+	@echo "Built XNU kernel artifacts only; set XNU_EFI_LOADER=/path/to/$(EFI_BOOT_NAME) to package a bootable EFI ISO."
+endif
 
 fetch-xnu:
 	sh scripts/fetch-xnu.sh "$(XNU_SOURCE_DIR)"

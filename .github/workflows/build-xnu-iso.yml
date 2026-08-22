@@ -1,4 +1,4 @@
-name: Build Apple XNU kernel ISOs
+name: Build Apple XNU kernels
 
 "on":
   push:
@@ -16,10 +16,18 @@ name: Build Apple XNU kernel ISOs
         description: Optional URL for an external arm64 XNU Mach-O used by the handoff capture step
         required: false
         type: string
+      xnu_efi_loader_url_amd64:
+        description: Optional URL for BOOTX64.EFI used to package and smoke boot an amd64 ISO
+        required: false
+        type: string
+      xnu_efi_loader_url_arm64:
+        description: Optional URL for BOOTAA64.EFI used to package and smoke boot an arm64 ISO
+        required: false
+        type: string
 
 jobs:
   build:
-    name: Build Apple XNU ${{ matrix.arch }} kernel ISO
+    name: Build Apple XNU ${{ matrix.arch }} kernel
     runs-on: macos-15
     strategy:
       fail-fast: false
@@ -41,10 +49,62 @@ jobs:
       - name: Install build tools
         run: brew install cmake ninja cdrtools xorriso mtools qemu llvm lld
 
-      - name: Build Apple XNU kernel and create ISO
-        run: make ARCH=${{ matrix.arch }} all
+      - name: Download optional XNU EFI loader
+        id: efi_loader
+        env:
+          ARCH: ${{ matrix.arch }}
+          INPUT_EFI_LOADER_URL_AMD64: ${{ inputs.xnu_efi_loader_url_amd64 }}
+          INPUT_EFI_LOADER_URL_ARM64: ${{ inputs.xnu_efi_loader_url_arm64 }}
+          VAR_EFI_LOADER_URL_AMD64: ${{ vars.XNU_EFI_LOADER_URL_AMD64 }}
+          VAR_EFI_LOADER_URL_ARM64: ${{ vars.XNU_EFI_LOADER_URL_ARM64 }}
+        run: |
+          case "$ARCH" in
+            amd64)
+              efi_boot_name=BOOTX64.EFI
+              efi_loader_url="${INPUT_EFI_LOADER_URL_AMD64:-$VAR_EFI_LOADER_URL_AMD64}"
+              ;;
+            arm64)
+              efi_boot_name=BOOTAA64.EFI
+              efi_loader_url="${INPUT_EFI_LOADER_URL_ARM64:-$VAR_EFI_LOADER_URL_ARM64}"
+              ;;
+            *)
+              echo "Unsupported ARCH: $ARCH" >&2
+              exit 2
+              ;;
+          esac
+
+          if [ -z "$efi_loader_url" ]; then
+            echo "No XNU EFI loader URL configured for $ARCH; CI will build kernel artifacts only."
+            echo "path=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mkdir -p /tmp/xnu-efi-loader
+          efi_loader="/tmp/xnu-efi-loader/$efi_boot_name"
+          curl -L --fail --retry 3 "$efi_loader_url" -o "$efi_loader"
+          test -s "$efi_loader"
+          file "$efi_loader"
+          echo "XNU_EFI_LOADER=$efi_loader" >> "$GITHUB_ENV"
+          echo "path=$efi_loader" >> "$GITHUB_OUTPUT"
+
+      - name: Build Apple XNU kernel artifacts
+        run: make ARCH=${{ matrix.arch }} build-xnu
+
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-xnu-kernel-${{ matrix.arch }}-artifacts
+          path: |
+            build/${{ matrix.arch }}/xnu-build/artifacts/xnu-kernel-artifacts.txt
+            build/${{ matrix.arch }}/xnu-build/artifacts/**
+          if-no-files-found: ignore
+
+      - name: Package ISO with provided XNU EFI loader
+        if: steps.efi_loader.outputs.path != ''
+        run: make ARCH=${{ matrix.arch }} XNU_EFI_LOADER="${{ steps.efi_loader.outputs.path }}" iso verify
 
       - name: Upload ISO artifact
+        if: steps.efi_loader.outputs.path != ''
         uses: actions/upload-artifact@v4
         with:
           name: apple-xnu-kernel-${{ matrix.arch }}-iso
@@ -52,11 +112,10 @@ jobs:
             build/${{ matrix.arch }}/apple-xnu-kernel-${{ matrix.arch }}.iso
             build/${{ matrix.arch }}/iso-contents.txt
             build/${{ matrix.arch }}/iso-eltorito.txt
-            build/${{ matrix.arch }}/limine-smoke/*
-            build/${{ matrix.arch }}/xnu-build/artifacts/xnu-kernel-artifacts.txt
           if-no-files-found: ignore
 
-      - name: Smoke boot Limine under UEFI
+      - name: Smoke boot XNU EFI loader under UEFI
+        if: steps.efi_loader.outputs.path != ''
         run: make ARCH=${{ matrix.arch }} smoke-boot
 
       - name: Download external arm64 XNU artifact for handoff capture
@@ -67,17 +126,17 @@ jobs:
           file /tmp/xnu-kernel/kernel.development
 
       - name: Capture arm64 XNU handoff boot
-        if: matrix.arch == 'arm64' && github.event_name == 'workflow_dispatch' && inputs.run_handoff_capture && inputs.xnu_kernel_artifact_url != ''
+        if: matrix.arch == 'arm64' && steps.efi_loader.outputs.path != '' && github.event_name == 'workflow_dispatch' && inputs.run_handoff_capture && inputs.xnu_kernel_artifact_url != ''
         run: |
-          make ARCH=arm64 XNU_KERNEL_ARTIFACT=/tmp/xnu-kernel/kernel.development handoff-boot
+          make ARCH=arm64 XNU_KERNEL_ARTIFACT=/tmp/xnu-kernel/kernel.development XNU_EFI_LOADER="${{ steps.efi_loader.outputs.path }}" iso verify smoke-boot
 
       - name: Upload smoke boot artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: apple-xnu-kernel-${{ matrix.arch }}-limine-smoke
+          name: apple-xnu-kernel-${{ matrix.arch }}-efi-smoke
           path: |
-            build/${{ matrix.arch }}/limine-smoke/*
+            build/${{ matrix.arch }}/efi-smoke/*
           if-no-files-found: ignore
 
       - name: Upload build logs
@@ -88,4 +147,3 @@ jobs:
           path: |
             build/${{ matrix.arch }}/xnu-build/*.log
           if-no-files-found: ignore
-
