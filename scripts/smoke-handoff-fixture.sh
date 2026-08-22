@@ -311,4 +311,4 @@ expect_jump_marker=0
 if [ "$arch" = "arm64" ]; then
     expect_jump_marker=1
 fi
-QEMU_MENU_WAIT="${QEMU_MENU_WAIT:-14}" QEMU_BOOT_WAIT="$qemu_boot_wait" QEMU_EXPECT_JUMP_MARKER="$expect_jump_marker" sh scripts/smoke-boot-limine.sh "$arch" "$image" "$out/qemu"
+QEMU_MENU_WAIT="${QEMU_MENU_WAIT:-14}" QEMU_BOOT_WAIT="$qemu_boot_wait" QEMU_EXPECT_JUMP_MARKER="$expect_jump_marker" sh scripts/smoke-boot-efi.sh "$arch" "$image" "$out/qemu"

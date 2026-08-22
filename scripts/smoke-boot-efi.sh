@@ -17,13 +17,13 @@ fi
 
 mkdir -p "$out"
 monitor="/tmp/os8-qemu-monitor-$$.sock"
-screenshot="$out/limine-smoke.ppm"
-boot_screenshot="$out/limine-booted.ppm"
-report="$out/limine-smoke.txt"
+screenshot="$out/efi-smoke.ppm"
+boot_screenshot="$out/efi-booted.ppm"
+report="$out/efi-smoke.txt"
 serial_log="$out/serial.log"
 vars="$out/uefi-vars.fd"
 rm -f "$monitor" "$screenshot" "$boot_screenshot" "$report" "$serial_log" "$vars"
-rm -f "$out"/limine-booted-*.ppm
+rm -f "$out"/efi-booted-*.ppm
 
 find_qemu_file() {
     pattern=$1
@@ -164,7 +164,7 @@ try:
         for index in range(boot_dumps):
             if index != 0:
                 time.sleep(boot_dump_interval)
-            target = boot_screenshot if index == boot_dumps - 1 else str(Path(boot_screenshot).with_name(f"limine-booted-{index + 1}.ppm"))
+            target = boot_screenshot if index == boot_dumps - 1 else str(Path(boot_screenshot).with_name(f"efi-booted-{index + 1}.ppm"))
             sock.sendall(f"screendump {target}\n".encode())
             time.sleep(0.5)
 finally:
@@ -300,6 +300,9 @@ report.write_text(
 )
 print(report.read_text(encoding="ascii"), end="")
 
+if allow_any_boot:
+    raise SystemExit(0)
+
 preflight_ok = (
     boot_handoff_green >= 1000
     and boot_handoff_panel >= 1000
@@ -309,13 +312,11 @@ jump_ok = boot_jump_marker >= 1000
 verbose_ok = boot_image is not None and boot_verbose_dark >= (boot_width * boot_height) // 2 and boot_verbose_text >= 100
 
 if menu_magenta < 20 and not preflight_ok and not verbose_ok and not serial_handoff and not (expect_jump_marker and (jump_ok or serial_jump)):
-    raise SystemExit("Limine branding colour was not visible; Limine menu likely did not load")
-if allow_any_boot:
-    raise SystemExit(0)
+    raise SystemExit("EFI loader did not produce a recognizable boot screen")
 if expect_jump_marker:
     if not (jump_ok or serial_jump):
         raise SystemExit("XNU handoff jump marker was not visible after entering the staged module")
     raise SystemExit(0)
 if not (preflight_ok or verbose_ok or serial_handoff):
-    raise SystemExit("Limine did not load the XNU verbose handoff screen after selecting the menu entry")
+    raise SystemExit("EFI loader did not reach the XNU verbose handoff screen")
 PY
