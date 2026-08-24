@@ -39,7 +39,11 @@ XNU_BOOT_ARGS="-v keepsyms=1 debug=0x144 serial=3"
 For OpenCore builds, these are written to
 `NVRAM/Add/7C436110-AB2A-4BBB-A880-FE41995C9F82/boot-args` in
 `EFI/OC/config.plist`. The ISO also includes `BOOT-ARGS.txt` with the same
-value.
+value. The generated OpenCore config disables vault enforcement and Apple
+Secure Boot model checks, uses `ScanPolicy=0`, sets a nonzero SMBIOS UUID, and
+loads the bundled `OpenRuntime.efi` plus `OpenHfsPlus.efi` drivers. The fetch
+step validates the generated config with the matching OpenCore `ocvalidate`
+utility before packaging.
 
 There is no local placeholder kernel source in this repository. By default, the
 build fails unless Apple XNU's external source tree produces real kernel
