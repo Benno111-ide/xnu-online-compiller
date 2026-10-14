@@ -38,6 +38,56 @@ jobs:
       - name: Compile and exercise init
         run: make test-init
 
+      - name: Test boot log validation
+        run: python3 -m unittest discover -s tests -p 'test_boot_report.py'
+
+  boot-test:
+    name: Boot packaged ${{ matrix.arch }} ISO and save OS log
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download packaged ISO
+        uses: actions/download-artifact@v4
+        with:
+          name: apple-xnu-kernel-${{ matrix.arch }}-iso
+          path: build/${{ matrix.arch }}
+
+      - name: Install UEFI boot test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 tesseract-ocr
+
+      - name: Boot ISO and capture guest output
+        env:
+          QEMU_RUN_SECONDS: '60'
+          QEMU_BOOT_DELAY: '20'
+          QEMU_DUMP_GUEST_MEMORY: '0'
+          QEMU_SCREENSHOT_COUNT: '7'
+          QEMU_SCREENSHOT_INTERVAL: '9'
+        run: |
+          sh scripts/virtualize-iso-capture.sh "${{ matrix.arch }}" \
+            "build/${{ matrix.arch }}/apple-xnu-kernel-${{ matrix.arch }}.iso" \
+            "build/${{ matrix.arch }}/iso-boot-test"
+
+      - name: Check boot output for loader progress and crashes
+        run: python3 scripts/check-boot-report.py "build/${{ matrix.arch }}/iso-boot-test"
+
+      - name: Upload OS boot log and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-xnu-kernel-${{ matrix.arch }}-os-boot-log
+          path: build/${{ matrix.arch }}/iso-boot-test/
+          if-no-files-found: warn
+          retention-days: 14
+
   build:
     name: Build Apple XNU ${{ matrix.arch }} kernel ISO
     runs-on: macos-15

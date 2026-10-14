@@ -153,7 +153,8 @@ debug["DisplayDelay"] = 0
 debug["DisplayLevel"] = 0x80000042
 debug["LogModules"] = "*"
 debug["SysReport"] = False
-debug["Target"] = 67
+# Enable serial logging as well as console/file output so CI can retain it.
+debug["Target"] = 75
 
 security = misc.setdefault("Security", {})
 security["AllowSetDefault"] = False

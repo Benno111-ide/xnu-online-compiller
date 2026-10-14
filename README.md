@@ -12,6 +12,16 @@ expected XNU source tree, invokes Apple XNU's own Makefile on macOS/Xcode,
 packages the produced kernel artifacts into a bootable UEFI ISO, verifies the
 ISO contents, and uploads the ISO as a workflow artifact.
 
+CI also boots each packaged ISO under QEMU/UEFI on Ubuntu for 60 seconds.
+The `apple-xnu-kernel-<arch>-os-boot-log` artifact retains the guest serial
+output in `serial.log`, QEMU logs, screenshots, OCR screen text, register
+output, and `boot-test.txt` for 14 days, including on test failure. The test
+requires recognizable OpenCore, fallback loader, or XNU output and rejects
+detected firmware exceptions, kernel panics, and triple faults. The report
+records XNU output separately: reaching the default OpenCore picker or
+arm64 fallback does not demonstrate a complete XNU/userspace boot. This
+QEMU test does not reproduce VirtualBox's Windows Hyper-V backend.
+
 Each ISO includes an EFI application at the standard fallback path for the
 target architecture:
 
