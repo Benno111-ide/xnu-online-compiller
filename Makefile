@@ -3,6 +3,7 @@ XNU_SOURCE_DIR ?= build/xnu-source
 XNU_KERNEL_ARTIFACT ?=
 XNU_EFI_LOADER ?=
 XNU_BOOT_ARGS ?= -v keepsyms=1 debug=0x144 serial=3
+XNU_INCLUDE_INIT ?= 1
 
 QEMU_MENU_WAIT ?= 14
 QEMU_BOOT_DUMPS ?= 1
@@ -21,6 +22,13 @@ EFI_DIR := $(BUILD_DIR)/efi
 BUILTIN_XNU_EFI_LOADER = $(EFI_DIR)/builtin/$(EFI_BOOT_NAME)
 EFI_IMAGE_SIZE_KB := 131072
 OPENCORE_DIR := build/opencore
+INIT_DIR := $(BUILD_DIR)/xnu-init
+
+ifeq ($(XNU_INCLUDE_INIT),1)
+INIT_PREREQ := build-init
+else ifneq ($(XNU_INCLUDE_INIT),0)
+$(error XNU_INCLUDE_INIT must be 0 or 1)
+endif
 
 ifeq ($(ARCH),amd64)
 XNU_ARCH := X86_64
@@ -56,7 +64,7 @@ else
 ISO_PREREQS := $(ISO_LOADER_PREREQ) build-xnu $(XNU_STAMP)
 endif
 
-.PHONY: all fetch-xnu verify-xnu fetch-limine fetch-opencore install-build-deps build-xnu build-bootstub build-xnu-efi-loader iso verify smoke-boot smoke-boot-capture virtualize-iso handoff-boot clean
+.PHONY: all fetch-xnu verify-xnu fetch-limine fetch-opencore install-build-deps build-xnu build-bootstub build-xnu-efi-loader build-init test-init iso verify smoke-boot smoke-boot-capture virtualize-iso handoff-boot clean
 
 all: iso verify
 
@@ -85,6 +93,12 @@ build-bootstub:
 build-xnu-efi-loader:
 	XNU_BOOT_ARGS="$(XNU_BOOT_ARGS)" sh scripts/build-xnu-efi-loader.sh "$(ARCH)" "$(BUILD_DIR)/xnu-efi-loader" "$(BUILTIN_XNU_EFI_LOADER)"
 
+build-init:
+	sh scripts/build-xnu-init.sh "$(ARCH)" "$(INIT_DIR)"
+
+test-init:
+	python3 tests/test_xnu_init.py
+
 iso: $(ISO)
 
 $(BUILD_DIR):
@@ -94,11 +108,16 @@ $(XNU_STAMP): xnu-upstream.env | $(BUILD_DIR)
 	. ./xnu-upstream.env; \
 	printf 'repo=%s\nref=%s\ncommit=%s\narch=%s\nxnu_arch=%s\n' "$$XNU_REPO_URL" "$$XNU_REF" "$$XNU_COMMIT" '$(ARCH)' '$(XNU_ARCH)' > $@
 
-$(ISO): $(ISO_PREREQS)
+$(ISO): $(ISO_PREREQS) $(INIT_PREREQ)
 	rm -rf "$(ISO_ROOT)"
 	mkdir -p "$(ISO_ROOT)/xnu-kernel" "$(ISO_ROOT)/boot" "$(ISO_ROOT)/EFI/BOOT" "$(BUILD_DIR)/efi"
 	printf 'apple-xnu-kernel-%s\n' '$(ARCH)' > "$(ISO_ROOT)/BUILD-LABEL.txt"
 	printf '%s\n' "$(XNU_BOOT_ARGS)" > "$(ISO_ROOT)/BOOT-ARGS.txt"
+	if [ "$(XNU_INCLUDE_INIT)" = 1 ]; then \
+		set -e; \
+		mkdir -p "$(ISO_ROOT)/userspace"; \
+		cp "$(INIT_DIR)/xnu-init-rootfs.tar" "$(INIT_DIR)/xnu-init-manifest.txt" "$(ISO_ROOT)/userspace/"; \
+	fi
 	cp "$(XNU_STAMP)" "$(ISO_ROOT)/XNU-UPSTREAM.txt"
 	. ./xnu-upstream.env; \
 	printf 'efi_vendor=%s\nopencore_repo=%s\nopencore_version=%s\nopencore_binary_url=%s\n' '$(ISO_EFI_VENDOR)' "$$OPENCORE_REPO_URL" "$$OPENCORE_VERSION" "$$OPENCORE_BINARY_URL" > "$(ISO_ROOT)/EFI-UPSTREAM.txt"
@@ -139,6 +158,11 @@ $(ISO): $(ISO_PREREQS)
 	mmd -i "$(ISO_ROOT)/EFI/efiboot.img" ::/EFI ::/EFI/BOOT ::/boot
 	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(EFI_DIR)/$(EFI_BOOT_NAME)" "::/EFI/BOOT/$(EFI_BOOT_NAME)"
 	mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/BOOT-ARGS.txt" "::/BOOT-ARGS.txt"
+	if [ "$(XNU_INCLUDE_INIT)" = 1 ]; then \
+		set -e; \
+		mmd -i "$(ISO_ROOT)/EFI/efiboot.img" ::/userspace; \
+		mcopy -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/userspace/"* ::/userspace/; \
+	fi
 	if [ "$(ISO_EFI_VENDOR)" = "opencore" ]; then \
 		mmd -i "$(ISO_ROOT)/EFI/efiboot.img" ::/EFI/OC; \
 		mcopy -s -i "$(ISO_ROOT)/EFI/efiboot.img" "$(ISO_ROOT)/EFI/OC"/* "::/EFI/OC/"; \
@@ -166,6 +190,18 @@ verify: $(ISO)
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/EFI/BOOT/$(EFI_BOOT_NAME)" >/dev/null
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/BOOT-ARGS.txt" | grep -q -- "$(XNU_BOOT_ARGS)"
 	mtype -i "$(ISO_ROOT)/EFI/efiboot.img" "::/boot/xnu-kernel.macho" >/dev/null
+	if [ "$(XNU_INCLUDE_INIT)" = 1 ]; then \
+		set -e; \
+		grep -q '/userspace/xnu-init-rootfs.tar' "$(BUILD_DIR)/iso-contents.txt"; \
+		grep -q '/userspace/xnu-init-manifest.txt' "$(BUILD_DIR)/iso-contents.txt"; \
+		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/userspace/xnu-init-rootfs.tar >/dev/null; \
+		mtype -i "$(ISO_ROOT)/EFI/efiboot.img" ::/userspace/xnu-init-manifest.txt | grep -q 'arch=$(ARCH)'; \
+		tar -tf "$(ISO_ROOT)/userspace/xnu-init-rootfs.tar" > "$(BUILD_DIR)/init-contents.txt"; \
+		grep -qx 'sbin/xnu-init' "$(BUILD_DIR)/init-contents.txt"; \
+		grep -qx 'sbin/launchd' "$(BUILD_DIR)/init-contents.txt"; \
+		grep -qx 'etc/xnu-init/services.conf' "$(BUILD_DIR)/init-contents.txt"; \
+		grep -qx 'etc/xnu-init/rc.boot' "$(BUILD_DIR)/init-contents.txt"; \
+	fi
 	if [ "$(ISO_EFI_VENDOR)" = "opencore" ]; then \
 		grep -q '/EFI/OC/OpenCore.efi' "$(BUILD_DIR)/iso-contents.txt"; \
 		grep -q '/EFI/OC/config.plist' "$(BUILD_DIR)/iso-contents.txt"; \

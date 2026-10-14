@@ -50,7 +50,7 @@ build fails unless Apple XNU's external source tree produces real kernel
 artifacts. The ISO no longer builds or packages the old Limine
 `bootloader.sys` handoff stub.
 
-Run the same build on an Ubuntu machine with:
+Run the same build on a macOS machine with Xcode installed:
 
 ```sh
 brew install xorriso
@@ -58,6 +58,13 @@ brew install mtools
 make ARCH=amd64 all
 make ARCH=arm64 all
 ```
+
+The default build also compiles the custom Darwin init described in
+[init/README.md](init/README.md) and bundles its root filesystem overlay at
+`/userspace/xnu-init-rootfs.tar` in both the ISO and EFI filesystem. This
+overlay contains `/sbin/xnu-init`, the `/sbin/launchd` entry point expected by
+XNU, and startup configuration. It is not a complete Darwin root filesystem;
+the EFI loader does not automatically extract or mount the overlay.
 
 If you already have a built XNU Mach-O from a macOS/Xcode machine, package it
 with the default EFI from this workspace with:
@@ -78,6 +85,11 @@ make ARCH=arm64 \
 That target packages the external kernel as `/boot/xnu-kernel.macho`, embeds
 the EFI loader in `EFI/BOOT/`, boots QEMU, and writes the capture report under
 `build/arm64/efi-smoke/`.
+
+Packaging an already built kernel on Linux requires `XNU_INCLUDE_INIT=0` to
+skip the macOS-only init build. This creates a kernel ISO without the init
+overlay. The supervisor itself can be compiled and tested on Linux or macOS
+with `make test-init`.
 
 Before packaging, `scripts/validate-xnu-macho.py` checks that the selected
 kernel artifact is a Mach-O/FAT Mach-O with the requested architecture slice,

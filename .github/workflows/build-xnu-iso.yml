@@ -26,6 +26,18 @@ name: Build Apple XNU kernels
         type: string
 
 jobs:
+  test-init:
+    name: Test init supervisor (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and exercise init
+        run: make test-init
+
   build:
     name: Build Apple XNU ${{ matrix.arch }} kernel ISO
     runs-on: macos-15
@@ -115,6 +127,15 @@ jobs:
             build/${{ matrix.arch }}/iso-contents.txt
             build/${{ matrix.arch }}/iso-eltorito.txt
           if-no-files-found: ignore
+
+      - name: Upload Darwin init overlay
+        uses: actions/upload-artifact@v4
+        with:
+          name: xnu-init-${{ matrix.arch }}
+          path: |
+            build/${{ matrix.arch }}/xnu-init/xnu-init-rootfs.tar
+            build/${{ matrix.arch }}/xnu-init/xnu-init-manifest.txt
+          if-no-files-found: error
 
       - name: Smoke boot XNU EFI loader under UEFI
         run: make ARCH=${{ matrix.arch }} smoke-boot
